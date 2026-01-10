@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-web",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:client": "pnpm --filter client dev",
+    "dev:server": "pnpm --filter server dev",
+    "build": "turbo build",
+    "build:client": "pnpm --filter client build",
+    "lint": "turbo lint",
+    "lint:client": "pnpm --filter client lint",
+    "clean": "turbo clean",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f",
+    "db:reset": "docker compose down -v",
+    "studio": "pnpm --filter server prisma:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.2"
+  }
+}

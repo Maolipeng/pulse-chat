@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: pulsechat-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pulsechat
+      POSTGRES_PASSWORD: 0fd3b5cb976829cffa1f7336cbb48a70
+      POSTGRES_DB: pulsechat
+    ports:
+      - "5432:5432"
+    volumes:
+      - pulsechat_postgres:/var/lib/postgresql/data
+
+volumes:
+  pulsechat_postgres:
