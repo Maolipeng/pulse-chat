@@ -638,7 +638,7 @@ io.on('connection', async (socket) => {
     io.to(recipientSocketId).emit('call:accept', { from })
   })
 
-  socket.on('call:offer', ({ to, sdp }) => {
+  socket.on('call:offer', ({ to, sdp, type }) => {
     const from = user.username
     if (!from || !to || !sdp) {
       return
@@ -651,7 +651,7 @@ io.on('connection', async (socket) => {
     }
 
     setCallPair(from, to)
-    io.to(recipientSocketId).emit('call:offer', { from, sdp })
+    io.to(recipientSocketId).emit('call:offer', { from, sdp, type })
   })
 
   socket.on('call:answer', ({ to, sdp }) => {

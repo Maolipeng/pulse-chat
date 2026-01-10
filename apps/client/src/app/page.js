@@ -183,6 +183,25 @@ export default function Home() {
   const apiUrl = resolveApiUrl();
 
   useEffect(() => {
+    const setAppHeight = () => {
+      if (typeof window === "undefined") return;
+      const height = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--app-height", `${height}px`);
+    };
+
+    setAppHeight();
+    window.visualViewport?.addEventListener("resize", setAppHeight);
+    window.visualViewport?.addEventListener("scroll", setAppHeight);
+    window.addEventListener("resize", setAppHeight);
+
+    return () => {
+      window.visualViewport?.removeEventListener("resize", setAppHeight);
+      window.visualViewport?.removeEventListener("scroll", setAppHeight);
+      window.removeEventListener("resize", setAppHeight);
+    };
+  }, []);
+
+  useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
 
@@ -309,6 +328,9 @@ export default function Home() {
     } catch (error) {
       if (wantsVideo) {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setCallNotice("Camera permission denied. Audio only.");
+        setCallType("audio");
+        callTypeRef.current = "audio";
       } else {
         throw error;
       }
@@ -332,9 +354,16 @@ export default function Home() {
     return pc;
   };
 
-  const handleIncomingOffer = async (from, sdp) => {
+  const handleIncomingOffer = async (from, sdp, type) => {
+    if (type) {
+      callTypeRef.current = type;
+      setCallType(type);
+    }
     try {
-      const pc = await ensurePeerConnection(from, callTypeRef.current === "video");
+      const pc = await ensurePeerConnection(
+        from,
+        (type || callTypeRef.current) === "video",
+      );
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -424,6 +453,38 @@ export default function Home() {
     const nextState = !track.enabled;
     track.enabled = nextState;
     setLocalVideoOn(nextState);
+  };
+
+  const enableCamera = async () => {
+    if (!peerRef.current || !localStreamRef.current || !socketRef.current) return;
+    if (localStreamRef.current.getVideoTracks().length > 0) {
+      setLocalVideoOn(true);
+      return;
+    }
+
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const videoTrack = videoStream.getVideoTracks()[0];
+      if (!videoTrack) return;
+
+      localStreamRef.current.addTrack(videoTrack);
+      peerRef.current.addTrack(videoTrack, localStreamRef.current);
+      setLocalVideoOn(true);
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+
+      const offer = await peerRef.current.createOffer();
+      await peerRef.current.setLocalDescription(offer);
+      socketRef.current.emit("call:offer", {
+        to: callPeerRef.current,
+        sdp: offer,
+        type: callTypeRef.current,
+      });
+    } catch (error) {
+      setCallNotice("Camera permission denied.");
+    }
   };
 
   const getConversationState = (conversationId) => {
@@ -878,7 +939,7 @@ export default function Home() {
         );
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        socket.emit("call:offer", { to: from, sdp: offer });
+        socket.emit("call:offer", { to: from, sdp: offer, type: callTypeRef.current });
         setCallState("connecting");
       } catch (error) {
         setCallNotice("Unable to start the call.");
@@ -886,7 +947,7 @@ export default function Home() {
       }
     });
 
-    socket.on("call:offer", ({ from, sdp }) => {
+    socket.on("call:offer", ({ from, sdp, type }) => {
       if (!from || !sdp) return;
       if (
         callStateRef.current !== "idle" &&
@@ -897,13 +958,21 @@ export default function Home() {
         return;
       }
 
+      if (callStateRef.current === "in-call") {
+        handleIncomingOffer(from, sdp, type);
+        return;
+      }
+
       if (callStateRef.current === "connecting") {
-        handleIncomingOffer(from, sdp);
+        handleIncomingOffer(from, sdp, type);
         return;
       }
 
       setCallPeer(from);
-      setIncomingOffer({ from, sdp, type: callTypeRef.current });
+      const nextType = type || callTypeRef.current;
+      callTypeRef.current = nextType;
+      setCallType(nextType);
+      setIncomingOffer({ from, sdp, type: nextType });
       setCallState("ringing");
     });
 
@@ -1241,9 +1310,9 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-[100svh] flex items-center justify-center px-0 py-0 sm:px-4 sm:py-6 [padding-bottom:env(safe-area-inset-bottom)]">
+    <div className="min-h-[var(--app-height,100svh)] flex items-stretch sm:items-center justify-center px-0 py-0 sm:px-4 sm:py-6 [padding-bottom:env(safe-area-inset-bottom)]">
       <audio ref={audioRef} autoPlay playsInline />
-      <div className="w-full h-[100svh] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)]">
+      <div className="w-full h-[var(--app-height,100svh)] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)]">
         <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] h-full">
           <aside
             className={`h-full border-r border-white/70 bg-gradient-to-b from-emerald-100/70 via-white/70 to-orange-100/70 p-5 sm:p-6 ${
@@ -1416,7 +1485,7 @@ export default function Home() {
           </aside>
 
           <main
-            className={`h-full flex flex-col ${
+            className={`h-full min-h-0 flex flex-col ${
               selectedConversationId ? "flex" : "hidden md:flex"
             }`}
           >
@@ -1569,6 +1638,11 @@ export default function Home() {
                         {getInitials(callPeer)}
                       </div>
                     )}
+                    {!remoteVideoOn && callType === "video" && (
+                      <div className="absolute top-2 left-2 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
+                        Remote camera off
+                      </div>
+                    )}
                   </div>
                   <div className="relative aspect-video rounded-2xl overflow-hidden bg-emerald-900/10 flex items-center justify-center">
                     <video
@@ -1587,13 +1661,25 @@ export default function Home() {
                       </div>
                     )}
                     {callType === "video" && (
-                      <button
-                        type="button"
-                        onClick={toggleCamera}
-                        className="absolute top-2 right-2 text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white/90"
-                      >
-                        {localVideoOn ? "Camera off" : "Camera on"}
-                      </button>
+                      <div className="absolute top-2 right-2 flex flex-col gap-2">
+                        {localVideoOn ? (
+                          <button
+                            type="button"
+                            onClick={toggleCamera}
+                            className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white/90"
+                          >
+                            Camera off
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={enableCamera}
+                            className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white/90"
+                          >
+                            Enable camera
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
