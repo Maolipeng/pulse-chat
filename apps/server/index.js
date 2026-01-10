@@ -183,6 +183,30 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   return res.json({ user: { id: user.id, username: user.username } })
 })
 
+app.put('/api/keys', authMiddleware, async (req, res) => {
+  const { identityKey } = req.body || {}
+  if (!identityKey) {
+    return res.status(400).json({ error: 'Missing identity key' })
+  }
+
+  const user = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { identityKey: String(identityKey) },
+  })
+
+  return res.json({ ok: true, identityKey: user.identityKey })
+})
+
+app.get('/api/keys/:username', authMiddleware, async (req, res) => {
+  const username = String(req.params.username || '').trim().toLowerCase()
+  const user = await prisma.user.findUnique({ where: { username } })
+  if (!user || !user.identityKey) {
+    return res.status(404).json({ error: 'Key not found' })
+  }
+
+  return res.json({ username: user.username, identityKey: user.identityKey })
+})
+
 app.get('/api/users', authMiddleware, async (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase()
   const users = await prisma.user.findMany({
@@ -234,6 +258,7 @@ app.get('/api/conversations', authMiddleware, async (req, res) => {
               body: lastMessage.body,
               createdAt: lastMessage.createdAt,
               senderId: lastMessage.senderId,
+              metadata: lastMessage.metadata,
             }
           : null,
         members: conversation.members.map((member) => ({
@@ -315,6 +340,100 @@ app.post('/api/conversations', authMiddleware, async (req, res) => {
   res.json({ id: conversation.id })
 })
 
+app.post('/api/conversations/:id/keys', authMiddleware, async (req, res) => {
+  const conversationId = req.params.id
+  const { keys = [] } = req.body || {}
+
+  const membership = await prisma.conversationMember.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId,
+        userId: req.user.id,
+      },
+    },
+  })
+
+  if (!membership || membership.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
+
+  const payloads = Array.isArray(keys) ? keys : []
+  const created = []
+
+  for (const item of payloads) {
+    if (!item?.userId || !item?.wrappedKey || !item?.iv) {
+      continue
+    }
+
+    const entry = await prisma.conversationKey.upsert({
+      where: {
+        conversationId_userId: {
+          conversationId,
+          userId: item.userId,
+        },
+      },
+      update: {
+        wrappedKey: String(item.wrappedKey),
+        iv: String(item.iv),
+        createdById: req.user.id,
+      },
+      create: {
+        conversationId,
+        userId: item.userId,
+        wrappedKey: String(item.wrappedKey),
+        iv: String(item.iv),
+        createdById: req.user.id,
+      },
+    })
+
+    created.push(entry.userId)
+  }
+
+  res.json({ ok: true, users: created })
+})
+
+app.get('/api/conversations/:id/keys/me', authMiddleware, async (req, res) => {
+  const conversationId = req.params.id
+  const membership = await prisma.conversationMember.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId,
+        userId: req.user.id,
+      },
+    },
+  })
+
+  if (!membership) {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
+
+  const key = await prisma.conversationKey.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId,
+        userId: req.user.id,
+      },
+    },
+    include: {
+      createdBy: true,
+    },
+  })
+
+  if (!key) {
+    return res.status(404).json({ error: 'Key not found' })
+  }
+
+  res.json({
+    wrappedKey: key.wrappedKey,
+    iv: key.iv,
+    createdBy: {
+      id: key.createdBy.id,
+      username: key.createdBy.username,
+      identityKey: key.createdBy.identityKey,
+    },
+  })
+})
+
 app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
   const conversationId = req.params.id
   const membership = await prisma.conversationMember.findUnique({
@@ -341,6 +460,7 @@ app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
     messages: messages.map((message) => ({
       id: message.id,
       body: message.body,
+      metadata: message.metadata,
       createdAt: message.createdAt,
       sender: { id: message.sender.id, username: message.sender.username },
     })),
@@ -401,7 +521,7 @@ io.on('connection', async (socket) => {
 
   broadcastUsers()
 
-  socket.on('message:send', async ({ conversationId, body }) => {
+  socket.on('message:send', async ({ conversationId, body, metadata }) => {
     if (!conversationId || !body) return
 
     const membership = await prisma.conversationMember.findUnique({
@@ -421,7 +541,8 @@ io.on('connection', async (socket) => {
       data: {
         conversationId,
         senderId: user.id,
-        body: String(body).trim(),
+        body: String(body),
+        metadata: metadata && typeof metadata === 'object' ? metadata : null,
       },
       include: { sender: true },
     })
@@ -435,6 +556,7 @@ io.on('connection', async (socket) => {
       id: message.id,
       conversationId,
       body: message.body,
+      metadata: message.metadata,
       createdAt: message.createdAt,
       sender: { id: message.sender.id, username: message.sender.username },
     })

@@ -17,10 +17,13 @@ model User {
   username     String               @unique
   passwordHash String
   avatarUrl    String?
+  identityKey  String?
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   memberships  ConversationMember[]
   messages     Message[]
+  conversationKeys ConversationKey[]
+  createdConversationKeys ConversationKey[] @relation("ConversationKeyCreator")
 }
 
 model Conversation {
@@ -32,6 +35,7 @@ model Conversation {
   lastMessageAt DateTime?
   members       ConversationMember[]
   messages      Message[]
+  keys          ConversationKey[]
 }
 
 model ConversationMember {
@@ -54,7 +58,23 @@ model Message {
   sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
   senderId       String
   body           String
+  metadata       Json?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+model ConversationKey {
+  id             String       @id @default(uuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  wrappedKey     String
+  iv             String
+  createdBy      User         @relation("ConversationKeyCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdById    String
+  createdAt      DateTime     @default(now())
+
+  @@unique([conversationId, userId])
 }

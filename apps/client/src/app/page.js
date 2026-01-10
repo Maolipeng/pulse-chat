@@ -2,6 +2,22 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import {
+  base64ToBuffer,
+  bufferToBase64,
+  decryptAesGcm,
+  deriveBits,
+  encryptAesGcm,
+  exportKey,
+  generateIdentityKeyPair,
+  hkdf,
+  importPrivateKey,
+  importPublicKey,
+  loadJson,
+  randomBytes,
+  sha256,
+  storeJson,
+} from "./crypto";
 
 const isPrivateHost = (hostname) => {
   if (!hostname) return false;
@@ -52,14 +68,6 @@ const formatTime = (timestamp) => {
   return new Date(timestamp).toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
-  });
-};
-
-const formatDate = (timestamp) => {
-  if (!timestamp) return "";
-  return new Date(timestamp).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
   });
 };
 
@@ -122,6 +130,10 @@ const getIceServers = () => {
   return servers;
 };
 
+const identityStorageKey = (username) => `pulsechat:identity:${username}`;
+const conversationStorageKey = (userId, conversationId) =>
+  `pulsechat:conv:${userId}:${conversationId}`;
+
 export default function Home() {
   const [authMode, setAuthMode] = useState("login");
   const [authUsername, setAuthUsername] = useState("");
@@ -165,6 +177,8 @@ export default function Home() {
   const callStateRef = useRef("idle");
   const callPeerRef = useRef("");
   const callTypeRef = useRef("audio");
+  const identityRef = useRef(null);
+  const conversationsRef = useRef([]);
 
   const apiUrl = resolveApiUrl();
 
@@ -179,6 +193,10 @@ export default function Home() {
   useEffect(() => {
     callTypeRef.current = callType;
   }, [callType]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   const apiFetch = async (path, options = {}) => {
     const headers = {
@@ -408,6 +426,278 @@ export default function Home() {
     setLocalVideoOn(nextState);
   };
 
+  const getConversationState = (conversationId) => {
+    if (!user) return null;
+    return loadJson(conversationStorageKey(user.id, conversationId));
+  };
+
+  const saveConversationState = (conversationId, state) => {
+    if (!user) return;
+    storeJson(conversationStorageKey(user.id, conversationId), state);
+  };
+
+  const clearConversationState = (conversationId) => {
+    if (!user) return;
+    window.localStorage.removeItem(conversationStorageKey(user.id, conversationId));
+  };
+
+  const ensureIdentityKey = async () => {
+    if (!user) return null;
+
+    const stored = loadJson(identityStorageKey(user.username));
+    if (stored?.privateJwk && stored?.publicJwk) {
+      const privateKey = await importPrivateKey(stored.privateJwk);
+      identityRef.current = {
+        publicJwk: stored.publicJwk,
+        privateKey,
+      };
+      return identityRef.current;
+    }
+
+    const keyPair = await generateIdentityKeyPair();
+    const publicJwk = await exportKey(keyPair.publicKey);
+    const privateJwk = await exportKey(keyPair.privateKey);
+
+    storeJson(identityStorageKey(user.username), { publicJwk, privateJwk });
+
+    identityRef.current = {
+      publicJwk,
+      privateKey: keyPair.privateKey,
+    };
+
+    return identityRef.current;
+  };
+
+  const uploadIdentityKey = async () => {
+    if (!identityRef.current) return;
+    await apiFetch("/api/keys", {
+      method: "PUT",
+      body: JSON.stringify({ identityKey: JSON.stringify(identityRef.current.publicJwk) }),
+    });
+  };
+
+  const getUserIdentityKey = async (username) => {
+    const payload = await apiFetch(`/api/keys/${username}`);
+    return payload.identityKey;
+  };
+
+  const deriveConversationKey = async (conversation, otherUsername) => {
+    if (!identityRef.current) return null;
+
+    const otherKeyRaw = await getUserIdentityKey(otherUsername);
+    const otherKeyJwk = JSON.parse(otherKeyRaw);
+    const otherPublicKey = await importPublicKey(otherKeyJwk);
+
+    const shared = await deriveBits(identityRef.current.privateKey, otherPublicKey);
+    const salt = new TextEncoder().encode(conversation.id);
+    const info = new TextEncoder().encode("pulsechat-direct");
+    const keyBytes = await hkdf(shared, salt, info, 32);
+
+    const state = {
+      type: "direct",
+      key: bufferToBase64(keyBytes),
+      senderChains: {},
+    };
+    saveConversationState(conversation.id, state);
+    return state;
+  };
+
+  const loadGroupKey = async (conversationId) => {
+    if (!identityRef.current) return null;
+
+    const payload = await apiFetch(`/api/conversations/${conversationId}/keys/me`);
+    const creatorKeyJwk = JSON.parse(payload.createdBy.identityKey || "{}");
+    const creatorKey = await importPublicKey(creatorKeyJwk);
+    const shared = await deriveBits(identityRef.current.privateKey, creatorKey);
+    const salt = new TextEncoder().encode(`wrap:${conversationId}`);
+    const info = new TextEncoder().encode("pulsechat-group-wrap");
+    const wrappingKey = await hkdf(shared, salt, info, 32);
+    const groupKeyBase64 = await decryptAesGcm(
+      wrappingKey,
+      payload.wrappedKey,
+      payload.iv,
+    );
+
+    const state = {
+      type: "group",
+      key: groupKeyBase64,
+      senderChains: {},
+    };
+
+    saveConversationState(conversationId, state);
+    return state;
+  };
+
+  const ensureConversationKey = async (conversation) => {
+    const cached = getConversationState(conversation.id);
+    if (cached?.key) return cached;
+
+    if (conversation.isGroup) {
+      return loadGroupKey(conversation.id);
+    }
+
+    const other = conversation.members.find(
+      (member) => member.username !== user?.username,
+    );
+    if (!other) return null;
+
+    return deriveConversationKey(conversation, other.username);
+  };
+
+  const deriveSenderChain = async (conversationId, groupKeyBase64, senderId) => {
+    const keyBytes = new Uint8Array(base64ToBuffer(groupKeyBase64));
+    const salt = new TextEncoder().encode(`sender:${conversationId}`);
+    const info = new TextEncoder().encode(`sender:${senderId}`);
+    const chainKey = await hkdf(keyBytes, salt, info, 32);
+    return { chainKey: bufferToBase64(chainKey), counter: 0 };
+  };
+
+  const getSenderChain = async (conversationState, conversationId, senderId) => {
+    if (!conversationState.senderChains) {
+      conversationState.senderChains = {};
+    }
+
+    if (!conversationState.senderChains[senderId]) {
+      conversationState.senderChains[senderId] = await deriveSenderChain(
+        conversationId,
+        conversationState.key,
+        senderId,
+      );
+    }
+
+    return conversationState.senderChains[senderId];
+  };
+
+  const encryptMessage = async (conversation, plaintext) => {
+    const state = await ensureConversationKey(conversation);
+    if (!state?.key || !user) {
+      throw new Error("Missing encryption key");
+    }
+
+    const senderChain = await getSenderChain(state, conversation.id, user.id);
+    const chainKeyBytes = new Uint8Array(base64ToBuffer(senderChain.chainKey));
+    const messageKey = await hkdf(
+      chainKeyBytes,
+      new TextEncoder().encode(`msg:${conversation.id}`),
+      new TextEncoder().encode("pulsechat-message"),
+      32,
+    );
+
+    const encrypted = await encryptAesGcm(messageKey, plaintext);
+
+    senderChain.chainKey = bufferToBase64(await sha256(chainKeyBytes));
+    senderChain.counter += 1;
+    saveConversationState(conversation.id, state);
+
+    return {
+      body: encrypted.ciphertext,
+      metadata: {
+        v: 1,
+        type: conversation.isGroup ? "group" : "direct",
+        iv: encrypted.iv,
+        senderId: user.id,
+        counter: senderChain.counter - 1,
+      },
+    };
+  };
+
+  const decryptMessage = async (conversation, message, retrying = false) => {
+    if (!message.metadata || !message.metadata.iv) {
+      return message.body;
+    }
+
+    const state = await ensureConversationKey(conversation);
+    if (!state?.key) {
+      return "[Encrypted message]";
+    }
+
+    const senderId = message.metadata.senderId || message.sender?.id;
+    if (!senderId) {
+      return "[Encrypted message]";
+    }
+
+    const senderChain = await getSenderChain(state, conversation.id, senderId);
+    let chainKeyBytes = new Uint8Array(base64ToBuffer(senderChain.chainKey));
+
+    if (typeof message.metadata.counter !== "number") {
+      return "[Encrypted message]";
+    }
+
+    while (senderChain.counter < message.metadata.counter) {
+      chainKeyBytes = await sha256(chainKeyBytes);
+      senderChain.counter += 1;
+    }
+
+    const messageKey = await hkdf(
+      chainKeyBytes,
+      new TextEncoder().encode(`msg:${conversation.id}`),
+      new TextEncoder().encode("pulsechat-message"),
+      32,
+    );
+
+    try {
+      const plaintext = await decryptAesGcm(
+        messageKey,
+        message.body,
+        message.metadata.iv,
+      );
+
+      senderChain.chainKey = bufferToBase64(await sha256(chainKeyBytes));
+      senderChain.counter += 1;
+      saveConversationState(conversation.id, state);
+
+      return plaintext;
+    } catch (error) {
+      if (retrying) {
+        return "[Unable to decrypt]";
+      }
+      clearConversationState(conversation.id);
+      const refreshed = await ensureConversationKey(conversation);
+      if (!refreshed) {
+        return "[Unable to decrypt]";
+      }
+      return decryptMessage(conversation, message, true);
+    }
+  };
+
+  const distributeGroupKey = async (conversation) => {
+    if (!identityRef.current) return;
+
+    const groupKeyBase64 = bufferToBase64(randomBytes(32));
+    const keysPayload = [];
+
+    for (const member of conversation.members) {
+      const identityKeyRaw = await getUserIdentityKey(member.username);
+      if (!identityKeyRaw) continue;
+      const memberKeyJwk = JSON.parse(identityKeyRaw);
+      const memberKey = await importPublicKey(memberKeyJwk);
+
+      const shared = await deriveBits(identityRef.current.privateKey, memberKey);
+      const salt = new TextEncoder().encode(`wrap:${conversation.id}`);
+      const info = new TextEncoder().encode("pulsechat-group-wrap");
+      const wrappingKey = await hkdf(shared, salt, info, 32);
+      const encrypted = await encryptAesGcm(wrappingKey, groupKeyBase64);
+
+      keysPayload.push({
+        userId: member.id,
+        wrappedKey: encrypted.ciphertext,
+        iv: encrypted.iv,
+      });
+    }
+
+    await apiFetch(`/api/conversations/${conversation.id}/keys`, {
+      method: "POST",
+      body: JSON.stringify({ keys: keysPayload }),
+    });
+
+    const state = {
+      type: "group",
+      key: groupKeyBase64,
+      senderChains: {},
+    };
+    saveConversationState(conversation.id, state);
+  };
+
   useEffect(() => {
     const stored = window.localStorage.getItem("pulsechat-token");
     if (stored) {
@@ -433,12 +723,36 @@ export default function Home() {
   }, [token]);
 
   useEffect(() => {
+    if (!user) return;
+
+    const setup = async () => {
+      try {
+        await ensureIdentityKey();
+        await uploadIdentityKey();
+      } catch (error) {
+        setNotice("Unable to initialize encryption keys.");
+      }
+    };
+
+    setup();
+  }, [user]);
+
+  useEffect(() => {
     if (!token || !user) return;
 
     const fetchConversations = async () => {
       try {
         const payload = await apiFetch("/api/conversations");
-        setConversations(payload.conversations || []);
+        const mapped = (payload.conversations || []).map((conversation) => {
+          if (conversation.lastMessage?.metadata) {
+            return { ...conversation, preview: "Encrypted message" };
+          }
+          return {
+            ...conversation,
+            preview: conversation.lastMessage?.body || "",
+          };
+        });
+        setConversations(mapped);
       } catch (error) {
         setNotice(error.message);
       }
@@ -468,40 +782,59 @@ export default function Home() {
       setUsersOnline(onlineUsers || []);
     });
 
-    socket.on("message:new", (payload) => {
+    socket.on("message:new", async (payload) => {
+      const conversation = conversationsRef.current.find(
+        (item) => item.id === payload.conversationId,
+      );
+
+      let plaintext = "[Encrypted message]";
+      if (conversation) {
+        try {
+          plaintext = await decryptMessage(conversation, payload);
+        } catch (error) {
+          plaintext = "[Unable to decrypt]";
+        }
+      }
+
+      const enriched = { ...payload, plaintext };
+
       setMessagesByConversation((prev) => {
         const updated = { ...prev };
         const thread = updated[payload.conversationId] || [];
-        updated[payload.conversationId] = [...thread, payload];
+        updated[payload.conversationId] = [...thread, enriched];
         return updated;
       });
 
       setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== payload.conversationId) {
+        prev.map((conversationItem) => {
+          if (conversationItem.id !== payload.conversationId) {
             if (payload.sender.username !== user.username) {
               return {
-                ...conversation,
-                unread: conversation.unread + 1,
+                ...conversationItem,
+                unread: conversationItem.unread + 1,
                 lastMessage: {
                   id: payload.id,
                   body: payload.body,
                   createdAt: payload.createdAt,
                   senderId: payload.sender.id,
+                  metadata: payload.metadata,
                 },
+                preview: plaintext,
               };
             }
-            return conversation;
+            return conversationItem;
           }
 
           return {
-            ...conversation,
+            ...conversationItem,
             lastMessage: {
               id: payload.id,
               body: payload.body,
               createdAt: payload.createdAt,
               senderId: payload.sender.id,
+              metadata: payload.metadata,
             },
+            preview: plaintext,
           };
         }),
       );
@@ -570,7 +903,7 @@ export default function Home() {
       }
 
       setCallPeer(from);
-      setIncomingOffer({ from, sdp });
+      setIncomingOffer({ from, sdp, type: callTypeRef.current });
       setCallState("ringing");
     });
 
@@ -666,7 +999,9 @@ export default function Home() {
     if (!search) return conversations;
     const term = search.toLowerCase();
     return conversations.filter((conversation) => {
-      const name = conversation.title || conversation.members.map((m) => m.username).join(", ");
+      const name =
+        conversation.title ||
+        conversation.members.map((m) => m.username).join(", ");
       return name.toLowerCase().includes(term);
     });
   }, [conversations, search]);
@@ -719,10 +1054,25 @@ export default function Home() {
     setMessageDraft("");
 
     try {
+      await ensureConversationKey(conversation);
       const payload = await apiFetch(`/api/conversations/${conversation.id}/messages`);
+      const decrypted = [];
+
+      for (const message of payload.messages || []) {
+        let plaintext = message.body;
+        if (message.metadata) {
+          try {
+            plaintext = await decryptMessage(conversation, message);
+          } catch (error) {
+            plaintext = "[Unable to decrypt]";
+          }
+        }
+        decrypted.push({ ...message, plaintext });
+      }
+
       setMessagesByConversation((prev) => ({
         ...prev,
-        [conversation.id]: payload.messages || [],
+        [conversation.id]: decrypted,
       }));
 
       await apiFetch(`/api/conversations/${conversation.id}/read`, {
@@ -745,15 +1095,24 @@ export default function Home() {
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!messageDraft.trim() || !selectedConversationId || !socketRef.current) return;
 
-    socketRef.current.emit("message:send", {
-      conversationId: selectedConversationId,
-      body: messageDraft.trim(),
-    });
+    const conversation = selectedConversation;
+    if (!conversation) return;
 
-    setMessageDraft("");
+    try {
+      const encrypted = await encryptMessage(conversation, messageDraft.trim());
+      socketRef.current.emit("message:send", {
+        conversationId: selectedConversationId,
+        body: encrypted.body,
+        metadata: encrypted.metadata,
+      });
+
+      setMessageDraft("");
+    } catch (error) {
+      setNotice("Unable to encrypt message.");
+    }
   };
 
   const handleCreateConversation = async (members, title) => {
@@ -776,6 +1135,10 @@ export default function Home() {
 
       if (payload.id) {
         setSelectedConversationId(payload.id);
+        const created = refreshed.conversations?.find((conv) => conv.id === payload.id);
+        if (created?.isGroup) {
+          await distributeGroupKey(created);
+        }
       }
     } catch (error) {
       setNotice(error.message);
@@ -795,6 +1158,14 @@ export default function Home() {
     setSelectedConversationId("");
     setMessagesByConversation({});
     window.localStorage.removeItem("pulsechat-token");
+  };
+
+  const handleResetEncryption = () => {
+    if (!user) return;
+    Object.keys(window.localStorage)
+      .filter((key) => key.startsWith(`pulsechat:conv:${user.id}:`))
+      .forEach((key) => window.localStorage.removeItem(key));
+    setNotice("Encryption state reset. Select a conversation to re-sync.");
   };
 
   if (!token || !user) {
@@ -870,9 +1241,9 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-6 sm:p-6">
+    <div className="min-h-[100svh] flex items-center justify-center px-0 py-0 sm:px-4 sm:py-6 [padding-bottom:env(safe-area-inset-bottom)]">
       <audio ref={audioRef} autoPlay playsInline />
-      <div className="w-full max-w-6xl h-[92svh] md:h-[84vh] bg-white/75 border border-white/70 rounded-3xl shadow-2xl backdrop-blur overflow-hidden">
+      <div className="w-full h-[100svh] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)]">
         <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] h-full">
           <aside
             className={`h-full border-r border-white/70 bg-gradient-to-b from-emerald-100/70 via-white/70 to-orange-100/70 p-5 sm:p-6 ${
@@ -1000,9 +1371,7 @@ export default function Home() {
                             isActive ? "text-white/80" : "text-emerald-700/80"
                           }`}
                         >
-                          {conversation.lastMessage
-                            ? conversation.lastMessage.body
-                            : "Start a new chat"}
+                          {conversation.preview || "Start a new chat"}
                         </p>
                         {conversation.unread > 0 && (
                           <span
@@ -1029,6 +1398,21 @@ export default function Home() {
             >
               Sign out
             </button>
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-amber-700">
+                Security
+              </p>
+              <p className="mt-2 text-xs text-amber-800">
+                If messages fail to decrypt, reset the local encryption cache.
+              </p>
+              <button
+                type="button"
+                onClick={handleResetEncryption}
+                className="mt-3 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800"
+              >
+                Reset encryption state
+              </button>
+            </div>
           </aside>
 
           <main
@@ -1036,7 +1420,7 @@ export default function Home() {
               selectedConversationId ? "flex" : "hidden md:flex"
             }`}
           >
-            <div className="flex items-center justify-between border-b border-white/70 px-5 py-4 sm:px-6 bg-white/70">
+            <div className="sticky top-0 z-20 flex items-center justify-between border-b border-white/70 px-5 py-4 sm:px-6 bg-white/90 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-emerald-700">
                   Chat
@@ -1216,7 +1600,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-6 sm:py-6 space-y-4 bg-white/40">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-6 sm:px-6 sm:py-6 space-y-4 bg-white/40 overscroll-y-contain">
               {!selectedConversationId && (
                 <div className="h-full flex items-center justify-center text-emerald-700/70">
                   Select a user to start chatting.
@@ -1226,6 +1610,7 @@ export default function Home() {
               {selectedConversationId &&
                 selectedMessages.map((message) => {
                   const isOutgoing = message.sender?.username === user.username;
+                  const content = message.plaintext || message.body;
 
                   return (
                     <div
@@ -1239,7 +1624,7 @@ export default function Home() {
                             : "bg-white text-emerald-900 border border-emerald-100"
                         }`}
                       >
-                        <p className="leading-relaxed">{message.body}</p>
+                        <p className="leading-relaxed">{content}</p>
                         <div className="mt-2 text-[11px] flex items-center gap-2 text-emerald-700">
                           <span>{formatTime(message.createdAt)}</span>
                           {!isOutgoing && message.sender?.username && (
@@ -1253,7 +1638,7 @@ export default function Home() {
               <div ref={bottomRef} />
             </div>
 
-            <div className="border-t border-white/70 bg-white/80 px-5 py-4 sm:px-6">
+            <div className="sticky bottom-0 z-20 border-t border-white/70 bg-white/95 backdrop-blur px-5 py-4 sm:px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
               <div className="flex gap-3">
                 <input
                   ref={messageInputRef}
@@ -1377,13 +1762,13 @@ export default function Home() {
         <div className="fixed inset-0 bg-emerald-950/30 flex items-center justify-center p-6">
           <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 text-center">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-700">
-              Incoming call
+              Incoming {incomingOffer.type || "audio"} call
             </p>
             <h3 className="text-2xl font-semibold text-emerald-950 mt-3">
               {incomingOffer.from}
             </h3>
             <p className="text-sm text-emerald-700 mt-2">
-              Accept the audio call?
+              Accept the call?
             </p>
             <div className="mt-6 flex items-center justify-center gap-3">
               <button
