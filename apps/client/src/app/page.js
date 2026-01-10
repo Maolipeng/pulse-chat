@@ -140,6 +140,8 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [token, setToken] = useState("");
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authOffline, setAuthOffline] = useState(false);
   const [user, setUser] = useState(null);
   const [usersOnline, setUsersOnline] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -155,6 +157,8 @@ export default function Home() {
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
   const [localVideoOn, setLocalVideoOn] = useState(false);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
+  const [videoFocus, setVideoFocus] = useState("remote");
+  const [videoFullscreen, setVideoFullscreen] = useState(false);
   const [search, setSearch] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerMode, setComposerMode] = useState("chat");
@@ -163,11 +167,14 @@ export default function Home() {
   const [userSearch, setUserSearch] = useState("");
   const [userResults, setUserResults] = useState([]);
   const [notice, setNotice] = useState("");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   const socketRef = useRef(null);
   const bottomRef = useRef(null);
   const searchRef = useRef(null);
   const messageInputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
   const audioRef = useRef(null);
@@ -239,6 +246,16 @@ export default function Home() {
     return response.json();
   };
 
+  const requestNotifications = async () => {
+    if (!("Notification" in window)) {
+      setNotice("Notifications not supported in this browser.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    setNotificationsEnabled(permission === "granted");
+  };
+
   const resetCallState = () => {
     if (peerRef.current) {
       peerRef.current.ontrack = null;
@@ -274,6 +291,8 @@ export default function Home() {
     setNeedsAudioUnlock(false);
     setLocalVideoOn(false);
     setRemoteVideoOn(false);
+    setVideoFocus("remote");
+    setVideoFullscreen(false);
   };
 
   const ensurePeerConnection = async (peerName, enableVideo) => {
@@ -455,6 +474,14 @@ export default function Home() {
     setLocalVideoOn(nextState);
   };
 
+  const toggleVideoFocus = () => {
+    setVideoFocus((prev) => (prev === "remote" ? "local" : "remote"));
+  };
+
+  const toggleVideoFullscreen = () => {
+    setVideoFullscreen((prev) => !prev);
+  };
+
   const enableCamera = async () => {
     if (!peerRef.current || !localStreamRef.current || !socketRef.current) return;
     if (localStreamRef.current.getVideoTracks().length > 0) {
@@ -629,7 +656,7 @@ export default function Home() {
     return conversationState.senderChains[senderId];
   };
 
-  const encryptMessage = async (conversation, plaintext) => {
+  const encryptMessage = async (conversation, plaintext, extraMetadata = {}) => {
     const state = await ensureConversationKey(conversation);
     if (!state?.key || !user) {
       throw new Error("Missing encryption key");
@@ -658,6 +685,7 @@ export default function Home() {
         iv: encrypted.iv,
         senderId: user.id,
         counter: senderChain.counter - 1,
+        ...extraMetadata,
       },
     };
   };
@@ -721,6 +749,14 @@ export default function Home() {
     }
   };
 
+  const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+
   const distributeGroupKey = async (conversation) => {
     if (!identityRef.current) return;
 
@@ -763,6 +799,12 @@ export default function Home() {
     const stored = window.localStorage.getItem("pulsechat-token");
     if (stored) {
       setToken(stored);
+    } else {
+      setAuthChecked(true);
+    }
+
+    if ("Notification" in window) {
+      setNotificationsEnabled(Notification.permission === "granted");
     }
   }, []);
 
@@ -770,13 +812,23 @@ export default function Home() {
     if (!token) return;
 
     const load = async () => {
-      try {
-        const me = await apiFetch("/api/auth/me");
-        setUser(me.user);
-      } catch (error) {
-        setToken("");
-        setUser(null);
-        window.localStorage.removeItem("pulsechat-token");
+      const maxRetries = 2;
+      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        try {
+          const me = await apiFetch("/api/auth/me");
+          setUser(me.user);
+          setAuthOffline(false);
+          setAuthChecked(true);
+          return;
+        } catch (error) {
+          if (attempt < maxRetries) {
+            await new Promise((resolve) => setTimeout(resolve, 600));
+          } else {
+            setUser(null);
+            setAuthOffline(true);
+            setAuthChecked(true);
+          }
+        }
       }
     };
 
@@ -858,6 +910,17 @@ export default function Home() {
       }
 
       const enriched = { ...payload, plaintext };
+
+      if (
+        notificationsEnabled &&
+        document.hidden &&
+        payload.sender?.username &&
+        plaintext
+      ) {
+        new Notification(`💬 ${payload.sender.username}`, {
+          body: plaintext,
+        });
+      }
 
       setMessagesByConversation((prev) => {
         const updated = { ...prev };
@@ -1096,6 +1159,10 @@ export default function Home() {
 
   const showVideoPanel =
     callState !== "idle" && (callType === "video" || localVideoOn);
+  const mainVideoIsRemote = videoFocus === "remote";
+  const hideChatPanel =
+    (callType === "video" && videoFullscreen) ||
+    (callType === "audio" && callState !== "idle");
 
   const handleAuth = async (event) => {
     event.preventDefault();
@@ -1184,6 +1251,67 @@ export default function Home() {
     }
   };
 
+  const pushLocalMessage = (conversationId, payload) => {
+    setMessagesByConversation((prev) => {
+      const updated = { ...prev };
+      const thread = updated[conversationId] || [];
+      updated[conversationId] = [...thread, payload];
+      return updated;
+    });
+  };
+
+  const handleSendFile = async (file) => {
+    if (!file || !selectedConversationId || !socketRef.current) return;
+    const conversation = selectedConversation;
+    if (!conversation) return;
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      pushLocalMessage(selectedConversationId, {
+        id: `local-${Date.now()}-${file.name}`,
+        body: dataUrl,
+        plaintext: dataUrl,
+        metadata: {
+          kind: "file",
+          name: file.name,
+          mime: file.type || "application/octet-stream",
+          size: file.size,
+        },
+        createdAt: new Date().toISOString(),
+        sender: { id: user.id, username: user.username },
+      });
+
+      const encrypted = await encryptMessage(conversation, dataUrl, {
+        kind: "file",
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        size: file.size,
+      });
+      socketRef.current.emit("message:send", {
+        conversationId: selectedConversationId,
+        body: encrypted.body,
+        metadata: encrypted.metadata,
+      });
+    } catch (error) {
+      setNotice("Unable to send file.");
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleDropFiles = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+
+    const file = event.dataTransfer?.files?.[0];
+    if (file) {
+      handleSendFile(file);
+    }
+  };
+
   const handleCreateConversation = async (members, title) => {
     try {
       const payload = await apiFetch("/api/conversations", {
@@ -1238,6 +1366,20 @@ export default function Home() {
   };
 
   if (!token || !user) {
+    if (!authChecked) {
+      return (
+        <div className="min-h-[var(--app-height,100svh)] flex items-center justify-center px-4 py-6 sm:p-6">
+          <div className="w-full max-w-md bg-white/85 border border-white/60 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur text-center">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-700">
+              PulseChat
+            </p>
+            <p className="mt-4 text-sm text-emerald-800">
+              Checking your session...
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen flex items-center justify-center px-4 py-6 sm:p-6">
         <form
@@ -1255,6 +1397,12 @@ export default function Home() {
               ? "Sign in to continue your conversations."
               : "Pick a username and password to get started."}
           </p>
+
+          {authOffline && (
+            <div className="mt-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+              Server unreachable. You can retry login or wait for reconnection.
+            </div>
+          )}
 
           {authError && (
             <div className="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-2xl px-4 py-3">
@@ -1310,9 +1458,24 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-[var(--app-height,100svh)] flex items-stretch sm:items-center justify-center px-0 py-0 sm:px-4 sm:py-6 [padding-bottom:env(safe-area-inset-bottom)]">
+    <div
+      className="min-h-[var(--app-height,100svh)] flex items-stretch sm:items-center justify-center px-0 py-0 sm:px-4 sm:py-6 [padding-bottom:env(safe-area-inset-bottom)]"
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragActive(true);
+      }}
+      onDragLeave={() => setDragActive(false)}
+      onDrop={handleDropFiles}
+    >
       <audio ref={audioRef} autoPlay playsInline />
-      <div className="w-full h-[var(--app-height,100svh)] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)]">
+      <div className="w-full h-[var(--app-height,100svh)] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)] relative">
+        {dragActive && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-emerald-900/20 backdrop-blur">
+            <div className="rounded-2xl border border-emerald-200 bg-white/90 px-6 py-4 text-sm text-emerald-900">
+              Drop a file to send
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] h-full">
           <aside
             className={`h-full border-r border-white/70 bg-gradient-to-b from-emerald-100/70 via-white/70 to-orange-100/70 p-5 sm:p-6 ${
@@ -1354,7 +1517,7 @@ export default function Home() {
                   setComposerMode("chat");
                   setComposerOpen(true);
                 }}
-                className="text-xs px-3 py-2 rounded-2xl border border-emerald-200 text-emerald-800 bg-white"
+                className="text-xs px-3 py-2 rounded-2xl border border-emerald-200 text-emerald-800 bg-white transition active:scale-95 active:bg-emerald-100"
               >
                 New chat
               </button>
@@ -1364,7 +1527,7 @@ export default function Home() {
                   setComposerMode("group");
                   setComposerOpen(true);
                 }}
-                className="text-xs px-3 py-2 rounded-2xl border border-emerald-200 text-emerald-800 bg-white"
+                className="text-xs px-3 py-2 rounded-2xl border border-emerald-200 text-emerald-800 bg-white transition active:scale-95 active:bg-emerald-100"
               >
                 New group
               </button>
@@ -1462,8 +1625,16 @@ export default function Home() {
 
             <button
               type="button"
+              onClick={requestNotifications}
+              className="mt-4 w-full rounded-2xl border border-emerald-200 text-emerald-800 bg-white px-4 py-3 text-xs font-semibold transition active:scale-95 active:bg-emerald-100"
+            >
+              {notificationsEnabled ? "Notifications enabled" : "Enable notifications"}
+            </button>
+
+            <button
+              type="button"
               onClick={handleLogout}
-              className="mt-6 text-xs text-emerald-700"
+              className="mt-6 text-xs text-emerald-700 transition active:scale-95"
             >
               Sign out
             </button>
@@ -1477,7 +1648,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleResetEncryption}
-                className="mt-3 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800"
+                className="mt-3 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 transition active:scale-[0.98] active:bg-amber-100"
               >
                 Reset encryption state
               </button>
@@ -1524,17 +1695,24 @@ export default function Home() {
                       type="button"
                       onClick={() => startCall("audio")}
                       disabled={callState !== "idle" || connectionStatus !== "online"}
-                      className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white disabled:opacity-50"
+                      className="h-9 w-9 rounded-full border border-emerald-200 text-emerald-800 bg-white disabled:opacity-50 transition active:scale-95 active:bg-emerald-50"
+                      aria-label="Start voice call"
                     >
-                      Call
+                      <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M15 5a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1l-4 3v-3H9a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6z"/>
+                      </svg>
                     </button>
                     <button
                       type="button"
                       onClick={() => startCall("video")}
                       disabled={callState !== "idle" || connectionStatus !== "online"}
-                      className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white disabled:opacity-50"
+                      className="h-9 w-9 rounded-full border border-emerald-200 text-emerald-800 bg-white disabled:opacity-50 transition active:scale-95 active:bg-emerald-50"
+                      aria-label="Start video call"
                     >
-                      Video
+                      <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <rect x="3" y="7" width="12" height="10" rx="2" />
+                        <path d="M15 10l5-3v10l-5-3z" />
+                      </svg>
                     </button>
                   </>
                 )}
@@ -1570,9 +1748,12 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={cancelCall}
-                  className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white"
+                  className="h-9 w-9 rounded-full border border-emerald-200 text-emerald-800 bg-white transition active:scale-95 active:bg-emerald-100"
+                  aria-label="Cancel call"
                 >
-                  Cancel
+                  <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M6 6l12 12M18 6L6 18" />
+                  </svg>
                 </button>
               </div>
             )}
@@ -1582,13 +1763,6 @@ export default function Home() {
                 <span>
                   Connecting to {callPeer} ({callType})...
                 </span>
-                <button
-                  type="button"
-                  onClick={endCall}
-                  className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white"
-                >
-                  Hang up
-                </button>
               </div>
             )}
 
@@ -1597,13 +1771,6 @@ export default function Home() {
                 <span>
                   In {callType} call with {callPeer}
                 </span>
-                <button
-                  type="button"
-                  onClick={endCall}
-                  className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white"
-                >
-                  Hang up
-                </button>
               </div>
             )}
 
@@ -1613,149 +1780,273 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={unlockAudio}
-                  className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white"
+                  className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white transition active:scale-95 active:bg-emerald-100"
                 >
                   Enable audio
                 </button>
               </div>
             )}
 
-            {showVideoPanel && (
-              <div className="px-5 sm:px-6 pb-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="relative aspect-video rounded-2xl overflow-hidden bg-emerald-900/10 flex items-center justify-center">
-                    <video
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      className="h-full w-full object-cover"
-                    />
-                    <div className="absolute bottom-2 left-2 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
-                      {callPeer || "Remote"}
+            {callType === "audio" && callState !== "idle" && (
+              <div className={`px-5 sm:px-6 pb-4 pt-4 ${hideChatPanel ? "flex-1 flex items-center" : ""}`}>
+                <div className="rounded-3xl border border-emerald-100 bg-white/90 px-4 py-5 shadow-sm w-full">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-emerald-600">
+                        Voice call
+                      </p>
+                      <h4 className="mt-2 text-lg font-semibold text-emerald-950">
+                        {callPeer || "Unknown"}
+                      </h4>
                     </div>
-                    {!remoteVideoOn && (
-                      <div className="absolute inset-0 flex items-center justify-center text-2xl font-semibold text-emerald-800">
-                        {getInitials(callPeer)}
-                      </div>
-                    )}
-                    {!remoteVideoOn && callType === "video" && (
-                      <div className="absolute top-2 left-2 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
-                        Remote camera off
-                      </div>
-                    )}
+                    <div
+                      className="h-14 w-14 rounded-full flex items-center justify-center text-base font-semibold text-emerald-900"
+                      style={{ backgroundColor: getAvatarColor(callPeer) }}
+                    >
+                      {getInitials(callPeer)}
+                    </div>
                   </div>
-                  <div className="relative aspect-video rounded-2xl overflow-hidden bg-emerald-900/10 flex items-center justify-center">
-                    <video
-                      ref={localVideoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="h-full w-full object-cover"
-                    />
-                    <div className="absolute bottom-2 left-2 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
-                      You
-                    </div>
-                    {!localVideoOn && (
-                      <div className="absolute inset-0 flex items-center justify-center text-2xl font-semibold text-emerald-800">
-                        {getInitials(user.username)}
-                      </div>
-                    )}
-                    {callType === "video" && (
-                      <div className="absolute top-2 right-2 flex flex-col gap-2">
-                        {localVideoOn ? (
-                          <button
-                            type="button"
-                            onClick={toggleCamera}
-                            className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white/90"
-                          >
-                            Camera off
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={enableCamera}
-                            className="text-xs px-3 py-1 rounded-full border border-emerald-200 text-emerald-800 bg-white/90"
-                          >
-                            Enable camera
-                          </button>
-                        )}
-                      </div>
-                    )}
+                  <div className="mt-4 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={endCall}
+                      className="h-11 w-11 rounded-full bg-red-500 text-white shadow-lg transition active:scale-95 active:bg-red-600"
+                      aria-label="Hang up"
+                    >
+                      <svg viewBox="0 0 24 24" className="mx-auto h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M6 8h12a3 3 0 0 1 3 3v2a1 1 0 0 1-1 1h-2l-2-2H8l-2 2H4a1 1 0 0 1-1-1v-2a3 3 0 0 1 3-3z" />
+                      </svg>
+                    </button>
+                    <span className="text-xs text-emerald-700">
+                      {callState === "calling" && "Calling..."}
+                      {callState === "connecting" && "Connecting..."}
+                      {callState === "in-call" && "Connected"}
+                    </span>
                   </div>
                 </div>
               </div>
             )}
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-6 sm:px-6 sm:py-6 space-y-4 bg-white/40 overscroll-y-contain">
-              {!selectedConversationId && (
-                <div className="h-full flex items-center justify-center text-emerald-700/70">
-                  Select a user to start chatting.
-                </div>
-              )}
-
-              {selectedConversationId &&
-                selectedMessages.map((message) => {
-                  const isOutgoing = message.sender?.username === user.username;
-                  const content = message.plaintext || message.body;
-
-                  return (
-                    <div
-                      key={message.id}
-                      className={`flex ${isOutgoing ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                          isOutgoing
-                            ? "bg-[#dcf8c6] text-emerald-900"
-                            : "bg-white text-emerald-900 border border-emerald-100"
-                        }`}
-                      >
-                        <p className="leading-relaxed">{content}</p>
-                        <div className="mt-2 text-[11px] flex items-center gap-2 text-emerald-700">
-                          <span>{formatTime(message.createdAt)}</span>
-                          {!isOutgoing && message.sender?.username && (
-                            <span>{message.sender.username}</span>
-                          )}
-                        </div>
-                      </div>
+            {showVideoPanel && (
+              <div className={`px-0 sm:px-6 pb-4 ${videoFullscreen ? "pt-0" : "pt-4"}`}>
+                <div className={`relative ${videoFullscreen ? "h-[55vh] sm:h-[50vh]" : "h-[32vh] sm:h-[28vh]"}`}>
+                  <div
+                    className="absolute inset-0 rounded-none sm:rounded-2xl overflow-hidden bg-emerald-900/10 flex items-center justify-center"
+                    onClick={toggleVideoFocus}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") toggleVideoFocus();
+                    }}
+                  >
+                    <video
+                      ref={mainVideoIsRemote ? remoteVideoRef : localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted={!mainVideoIsRemote}
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute bottom-3 left-3 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
+                      {mainVideoIsRemote ? callPeer || "Remote" : "You"}
                     </div>
-                  );
-                })}
-              <div ref={bottomRef} />
-            </div>
+                    {!remoteVideoOn && mainVideoIsRemote && (
+                      <div className="absolute inset-0 flex items-center justify-center text-2xl font-semibold text-emerald-800">
+                        {getInitials(callPeer)}
+                      </div>
+                    )}
+                    {!localVideoOn && !mainVideoIsRemote && (
+                      <div className="absolute inset-0 flex items-center justify-center text-2xl font-semibold text-emerald-800">
+                        {getInitials(user.username)}
+                      </div>
+                    )}
+                    {!remoteVideoOn && callType === "video" && mainVideoIsRemote && (
+                      <div className="absolute top-3 left-3 text-xs text-emerald-800 bg-white/80 rounded-full px-2 py-1">
+                        Remote camera off
+                      </div>
+                    )}
+                  </div>
 
-            <div className="sticky bottom-0 z-20 border-t border-white/70 bg-white/95 backdrop-blur px-5 py-4 sm:px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
-              <div className="flex gap-3">
-                <input
-                  ref={messageInputRef}
-                  value={messageDraft}
-                  onChange={(event) => setMessageDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      handleSend();
-                    }
-                  }}
-                  placeholder={
-                    selectedConversationId
-                      ? "Type a message"
-                      : "Select a conversation first"
-                  }
-                  disabled={!selectedConversationId}
-                  className="flex-1 rounded-2xl border border-emerald-100 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-400 disabled:bg-gray-100"
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!selectedConversationId}
-                  className="rounded-2xl bg-emerald-600 text-white px-5 py-3 text-sm font-semibold disabled:bg-emerald-300"
-                >
-                  Send
-                </button>
+                  <div
+                    className="absolute bottom-4 right-4 h-24 w-16 sm:h-28 sm:w-20 rounded-xl overflow-hidden border border-white/70 bg-emerald-900/10 shadow-lg"
+                    onClick={toggleVideoFocus}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") toggleVideoFocus();
+                    }}
+                  >
+                    <video
+                      ref={mainVideoIsRemote ? localVideoRef : remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      muted={mainVideoIsRemote}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+
+                  <div className="absolute top-4 right-4 flex items-center gap-2">
+                    {callType === "video" && (
+                      <button
+                        type="button"
+                        onClick={localVideoOn ? toggleCamera : enableCamera}
+                        className="h-9 w-9 rounded-full border border-emerald-200 text-emerald-800 bg-white/90 transition active:scale-95 active:bg-emerald-100"
+                        aria-label={localVideoOn ? "Turn camera off" : "Enable camera"}
+                      >
+                        <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <rect x="3" y="7" width="12" height="10" rx="2" />
+                          <path d="M15 10l5-3v10l-5-3z" />
+                          {!localVideoOn && <path d="M4 20L20 4" />}
+                        </svg>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={toggleVideoFullscreen}
+                      className="h-9 w-9 rounded-full border border-emerald-200 text-emerald-800 bg-white/90 transition active:scale-95 active:bg-emerald-100"
+                      aria-label={videoFullscreen ? "Exit full screen" : "Full screen"}
+                    >
+                      <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={endCall}
+                      className="h-9 w-9 rounded-full bg-red-500 text-white shadow-lg transition active:scale-95 active:bg-red-600"
+                      aria-label="Hang up"
+                    >
+                      <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M6 8h12a3 3 0 0 1 3 3v2a1 1 0 0 1-1 1h-2l-2-2H8l-2 2H4a1 1 0 0 1-1-1v-2a3 3 0 0 1 3-3z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div className="mt-2 text-xs text-emerald-600">
-                Enter to send, Shift + Enter for new line.
-              </div>
-            </div>
+            )}
+
+            {!hideChatPanel && (
+              <>
+                <div className="flex-1 min-h-0 overflow-y-auto px-5 py-6 sm:px-6 sm:py-6 space-y-4 bg-white/40 overscroll-y-contain">
+                  {!selectedConversationId && (
+                    <div className="h-full flex items-center justify-center text-emerald-700/70">
+                      Select a user to start chatting.
+                    </div>
+                  )}
+
+                  {selectedConversationId &&
+                    selectedMessages.map((message) => {
+                      const isOutgoing = message.sender?.username === user.username;
+                      const content = message.plaintext || message.body;
+                      const isFile = message.metadata?.kind === "file";
+                      const isImage =
+                        isFile && (message.metadata?.mime || "").startsWith("image/");
+
+                      return (
+                        <div
+                          key={message.id}
+                          className={`flex ${isOutgoing ? "justify-end" : "justify-start"}`}
+                        >
+                          <div
+                            className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                              isOutgoing
+                                ? "bg-[#dcf8c6] text-emerald-900"
+                                : "bg-white text-emerald-900 border border-emerald-100"
+                            }`}
+                          >
+                            {isFile ? (
+                              <div className="space-y-2">
+                                {isImage && (
+                                  <a
+                                    href={content}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block overflow-hidden rounded-xl border border-emerald-100"
+                                  >
+                                    <img
+                                      src={content}
+                                      alt={message.metadata?.name || "image"}
+                                      className="h-40 w-full object-cover"
+                                    />
+                                  </a>
+                                )}
+                                <a
+                                  href={content}
+                                  download={message.metadata?.name || "file"}
+                                  className="block rounded-xl border border-emerald-100 bg-white/80 px-3 py-2 text-sm text-emerald-800 hover:border-emerald-300"
+                                >
+                                  📎 {message.metadata?.name || "Download file"}
+                                </a>
+                              </div>
+                            ) : (
+                              <p className="leading-relaxed">{content}</p>
+                            )}
+                            <div className="mt-2 text-[11px] flex items-center gap-2 text-emerald-700">
+                              <span>{formatTime(message.createdAt)}</span>
+                              {!isOutgoing && message.sender?.username && (
+                                <span>{message.sender.username}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  <div ref={bottomRef} />
+                </div>
+
+                <div className="sticky bottom-0 z-20 border-t border-white/70 bg-white/95 backdrop-blur px-5 py-4 sm:px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                  <div className="flex gap-3">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(event) => handleSendFile(event.target.files?.[0])}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={!selectedConversationId}
+                      className="h-11 w-11 rounded-full border border-emerald-200 text-emerald-800 bg-white transition active:scale-95 active:bg-emerald-100 disabled:opacity-50"
+                      aria-label="Send file"
+                    >
+                      <svg viewBox="0 0 24 24" className="mx-auto h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M12 5v12a3 3 0 1 1-6 0V7a4 4 0 0 1 8 0v9a2 2 0 1 1-4 0V8" />
+                      </svg>
+                    </button>
+                    <input
+                      ref={messageInputRef}
+                      value={messageDraft}
+                      onChange={(event) => setMessageDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          handleSend();
+                        }
+                      }}
+                      placeholder={
+                        selectedConversationId
+                          ? "Type a message"
+                          : "Select a conversation first"
+                      }
+                      disabled={!selectedConversationId}
+                      className="flex-1 rounded-2xl border border-emerald-100 bg-white px-4 py-3 text-sm outline-none focus:border-emerald-400 disabled:bg-gray-100"
+                    />
+                    <button
+                      onClick={handleSend}
+                      disabled={!selectedConversationId}
+                      className="h-11 w-11 rounded-full bg-emerald-600 text-white flex items-center justify-center disabled:bg-emerald-300 transition active:scale-95 active:bg-emerald-700"
+                      aria-label="Send message"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M3 12l18-9-4 18-5-6-9-3z" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="mt-2 text-xs text-emerald-600">
+                    Enter to send, Shift + Enter for new line.
+                  </div>
+                </div>
+              </>
+            )}
           </main>
         </div>
       </div>
