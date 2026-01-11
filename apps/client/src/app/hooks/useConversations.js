@@ -26,6 +26,10 @@ export default function useConversations({
   const [composerTitle, setComposerTitle] = useState("");
   const [composerMembers, setComposerMembers] = useState("");
 
+  const lastConversationKey = user?.username
+    ? `pulsechat-last-conversation:${user.username}`
+    : "";
+
   const conversationsRef = useRef([]);
 
   useEffect(() => {
@@ -63,6 +67,7 @@ export default function useConversations({
     setMessagesByConversation({});
     setMessageDraft("");
   }, [user]);
+
 
   useEffect(() => {
     if (!socket || !user) return;
@@ -260,6 +265,34 @@ export default function useConversations({
       socket,
     ],
   );
+
+  useEffect(() => {
+    if (!user || !lastConversationKey) return;
+    if (typeof window === "undefined") return;
+    if (selectedConversationId) {
+      window.localStorage.setItem(lastConversationKey, selectedConversationId);
+    } else {
+      window.localStorage.removeItem(lastConversationKey);
+    }
+  }, [lastConversationKey, selectedConversationId, user]);
+
+  useEffect(() => {
+    if (!user || !lastConversationKey) return;
+    if (selectedConversationId || conversations.length === 0) return;
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(lastConversationKey);
+    if (!stored) return;
+    const conversation = conversations.find((item) => item.id === stored);
+    if (conversation) {
+      handleSelectConversation(conversation);
+    }
+  }, [
+    conversations,
+    handleSelectConversation,
+    lastConversationKey,
+    selectedConversationId,
+    user,
+  ]);
 
   const pushLocalMessage = useCallback((conversationId, payload) => {
     setMessagesByConversation((prev) => {

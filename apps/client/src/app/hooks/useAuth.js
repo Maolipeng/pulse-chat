@@ -13,6 +13,7 @@ export default function useAuth() {
   const [authChecked, setAuthChecked] = useState(false);
   const [authOffline, setAuthOffline] = useState(false);
   const [user, setUser] = useState(null);
+  const [needsValidation, setNeedsValidation] = useState(false);
 
   const apiFetch = useCallback(
     async (path, options = {}) => {
@@ -41,15 +42,29 @@ export default function useAuth() {
 
   useEffect(() => {
     const stored = window.localStorage.getItem("pulsechat-token");
+    const storedUser = window.localStorage.getItem("pulsechat-user");
     if (stored) {
       setToken(stored);
-    } else {
-      setAuthChecked(true);
+      if (storedUser) {
+        try {
+          const parsed = JSON.parse(storedUser);
+          if (parsed?.username) {
+            setUser(parsed);
+            setAuthChecked(true);
+            return;
+          }
+        } catch (error) {
+          window.localStorage.removeItem("pulsechat-user");
+        }
+      }
+      setNeedsValidation(true);
+      return;
     }
+    setAuthChecked(true);
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !needsValidation) return;
 
     const load = async () => {
       const maxRetries = 2;
@@ -57,15 +72,18 @@ export default function useAuth() {
         try {
           const me = await apiFetch("/api/auth/me");
           setUser(me.user);
+          window.localStorage.setItem("pulsechat-user", JSON.stringify(me.user));
           setAuthOffline(false);
+          setNeedsValidation(false);
           setAuthChecked(true);
           return;
         } catch (error) {
           if (attempt < maxRetries) {
             await new Promise((resolve) => setTimeout(resolve, 600));
           } else {
-            setUser(null);
+            setUser((prev) => prev);
             setAuthOffline(true);
+            setNeedsValidation(false);
             setAuthChecked(true);
           }
         }
@@ -73,7 +91,7 @@ export default function useAuth() {
     };
 
     load();
-  }, [apiFetch, token]);
+  }, [apiFetch, needsValidation, token]);
 
   const handleAuth = useCallback(
     async (event) => {
@@ -89,7 +107,13 @@ export default function useAuth() {
           }),
         });
         setToken(payload.token);
+        if (payload.user) {
+          setUser(payload.user);
+          window.localStorage.setItem("pulsechat-user", JSON.stringify(payload.user));
+        }
         window.localStorage.setItem("pulsechat-token", payload.token);
+        setAuthChecked(true);
+        setAuthOffline(false);
       } catch (error) {
         setAuthError(error.message);
       }
@@ -101,6 +125,7 @@ export default function useAuth() {
     setToken("");
     setUser(null);
     window.localStorage.removeItem("pulsechat-token");
+    window.localStorage.removeItem("pulsechat-user");
   }, []);
 
   return useMemo(

@@ -37,6 +37,7 @@ export default function ChatApp({ initialTab = "chat" }) {
   const {
     apiFetch,
     authChecked,
+    authOffline,
     token,
     user,
     handleLogout,
@@ -119,10 +120,10 @@ export default function ChatApp({ initialTab = "chat" }) {
 
   useEffect(() => {
     if (!authChecked) return;
-    if (!token || !user) {
+    if (!token) {
       router.replace("/login");
     }
-  }, [authChecked, router, token, user]);
+  }, [authChecked, router, token]);
 
   useEffect(() => {
     if (callSession.callState !== "idle") return;
@@ -178,8 +179,23 @@ export default function ChatApp({ initialTab = "chat" }) {
     );
   }
 
-  if (!token || !user) {
+  if (!token) {
     return null;
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-[var(--app-height,100svh)] flex items-center justify-center px-4 py-6 sm:p-6">
+        <div className="w-full max-w-md bg-white/85 border border-white/60 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur text-center">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-700">
+            PulseChat
+          </p>
+          <p className="mt-4 text-sm text-emerald-800">
+            {authOffline ? "Offline mode. Reconnecting..." : "Checking your session..."}
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
