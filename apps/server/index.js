@@ -481,6 +481,54 @@ app.post('/api/conversations/:id/read', authMiddleware, async (req, res) => {
   res.json({ ok: true })
 })
 
+app.post('/api/messages', authMiddleware, async (req, res) => {
+  const { conversationId, body, metadata } = req.body || {}
+  if (!conversationId || !body) {
+    return res.status(400).json({ error: 'Missing conversationId or body' })
+  }
+
+  const membership = await prisma.conversationMember.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId,
+        userId: req.user.id,
+      },
+    },
+  })
+
+  if (!membership) {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
+
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      senderId: req.user.id,
+      body: String(body),
+      metadata: metadata && typeof metadata === 'object' ? metadata : null,
+    },
+    include: { sender: true },
+  })
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastMessageAt: message.createdAt },
+  })
+
+  const payload = {
+    id: message.id,
+    conversationId,
+    body: message.body,
+    metadata: message.metadata,
+    createdAt: message.createdAt,
+    sender: { id: message.sender.id, username: message.sender.username },
+  }
+
+  io.to(`conversation:${conversationId}`).emit('message:new', payload)
+
+  res.json({ message: payload })
+})
+
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token
   if (!token) {

@@ -1,6 +1,7 @@
 import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegister from "./sw-register";
+import DevConsole from "./components/DevConsole";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -20,6 +21,7 @@ export default function RootLayout({ children }) {
       <body className={`${spaceGrotesk.variable} antialiased`}>
         {children}
         <ServiceWorkerRegister />
+        <DevConsole />
       </body>
     </html>
   );
