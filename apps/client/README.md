@@ -1,36 +1,71 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Web Client (Next.js)
 
-## Getting Started
+Next.js client for PulseChat. This app renders the web UI and connects to the Node server via HTTP and Socket.IO.
 
-First, run the development server:
+## Requirements
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Node.js 18+ (recommended)
+- pnpm 9+
+- Running API server (see `apps/server`)
+
+## Environment
+
+Create `apps/client/.env.local` (or edit if already present):
+
+```
+NEXT_PUBLIC_API_URL=http://localhost:3001
+NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+If you use a hosted server, replace with your public URL.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## Install
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+From repo root:
 
-## Learn More
+```
+pnpm install
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Development
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+From repo root:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+pnpm dev:client
+```
 
-## Deploy on Vercel
+Or from this folder:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+pnpm dev
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+App runs on `http://localhost:3000` by default.
+
+## Build
+
+From repo root:
+
+```
+pnpm build:client
+```
+
+## Production
+
+Build first, then start:
+
+```
+pnpm --filter client build
+pnpm --filter client start
+```
+
+## Common issues
+
+- Wrong API URL: make sure `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` are set and point to a reachable server.
+- CORS: the server currently allows `*`, but reverse proxies can still block WebSocket upgrades.
+
+## Project structure
+
+- `src/app/` Next.js app router pages and UI
+- `public/` static assets

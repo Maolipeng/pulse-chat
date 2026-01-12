@@ -1,8 +1,8 @@
 # Flutter Client
 
-This is the cross-platform Flutter client. The UI is styled to match the soft, neumorphic look in the provided reference.
+Cross-platform Flutter app (Android/iOS/macOS/Web) that connects to the same server used by the web client.
 
-## Features covered
+## Features
 
 - Auth (login/register), token persistence
 - Conversations list and search
@@ -10,35 +10,68 @@ This is the cross-platform Flutter client. The UI is styled to match the soft, n
 - Audio/video calls (WebRTC)
 - Socket updates for new messages and online users
 
-Notes: calls use default Google STUN servers. If you need TURN/STUN customization, wire it into `CallState` ICE servers.
+## Requirements
 
-If you chat with older users, they must log in once on web or Flutter to publish their identity key.
+- Flutter SDK 3.3+
+- Running API server (see `apps/server`)
+- Android: Android Studio + SDK, emulator or device
 
-## Run
+## Quick start
 
-```bash
+```
 cd apps/flutter
 flutter pub get
 flutter run
 ```
 
-## Build (web)
+## Build
 
-```bash
-cd apps/flutter
+Android (APK):
+
+```
+flutter build apk
+```
+
+Web:
+
+```
 flutter build web
 ```
 
-## Configure API/Socket endpoints
+## Configuration
 
-Use compile-time envs if needed:
+Runtime endpoints are resolved by `AppConfig`:
 
-```bash
+- Debug defaults:
+  - Android emulator: `http://10.0.2.2:3001`
+  - macOS: `http://127.0.0.1:3001`
+  - Others: `http://localhost:3001`
+- Release defaults to `https://chat-server.peakol.top`
+
+Override via `--dart-define`:
+
+```
 flutter run --dart-define=API_URL=http://localhost:3001 --dart-define=SOCKET_URL=http://localhost:3001
 ```
 
-For macOS-specific overrides:
+macOS specific overrides:
 
-```bash
+```
 flutter run -d macos --dart-define=MAC_API_URL=http://127.0.0.1:3001 --dart-define=MAC_SOCKET_URL=http://127.0.0.1:3001
 ```
+
+## Permissions
+
+Android manifest already includes:
+
+- `RECORD_AUDIO`
+- `CAMERA`
+- `MODIFY_AUDIO_SETTINGS`
+- `INTERNET`
+
+If you add Bluetooth audio routing, you may need `BLUETOOTH_CONNECT` on Android 12+.
+
+## Notes
+
+- Calls use default Google STUN servers. For TURN/STUN customization, update the ICE servers in `CallState`.
+- Users must log in once on web or Flutter to publish identity keys before encrypted chat works across devices.

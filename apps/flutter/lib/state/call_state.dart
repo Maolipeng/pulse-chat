@@ -49,8 +49,13 @@ class CallState extends ChangeNotifier {
     callState = 'calling';
     notifyListeners();
 
-    await _prepareOutgoingMedia(type);
-    _socket?.emit('call:invite', {'to': peer, 'type': type});
+    try {
+      await _prepareOutgoingMedia(type);
+      _socket?.emit('call:invite', {'to': peer, 'type': type});
+    } catch (error) {
+      callNotice = 'Unable to start the call: ${error.toString()}';
+      _resetCallState();
+    }
   }
 
   Future<void> acceptCall() async {
@@ -196,16 +201,21 @@ class CallState extends ChangeNotifier {
     _socket?.on('call:accept', (payload) async {
       final from = payload['from']?.toString() ?? '';
       if (from.isEmpty || callPeer != from) return;
-      await _ensurePeerConnection(from, callType == 'video');
-      final offer = await _peerConnection!.createOffer(_offerConstraints());
-      await _peerConnection!.setLocalDescription(offer);
-      _socket?.emit('call:offer', {
-        'to': from,
-        'sdp': offer.toMap(),
-        'type': callType,
-      });
-      callState = 'connecting';
-      notifyListeners();
+      try {
+        await _ensurePeerConnection(from, callType == 'video');
+        final offer = await _peerConnection!.createOffer(_offerConstraints());
+        await _peerConnection!.setLocalDescription(offer);
+        _socket?.emit('call:offer', {
+          'to': from,
+          'sdp': offer.toMap(),
+          'type': callType,
+        });
+        callState = 'connecting';
+        notifyListeners();
+      } catch (error) {
+        callNotice = 'Unable to start the call: ${error.toString()}';
+        _resetCallState();
+      }
     });
 
     _socket?.on('call:offer', (payload) async {
@@ -328,11 +338,19 @@ class CallState extends ChangeNotifier {
         'video': wantsVideo,
       });
       _attachLocalStream(stream);
-    } catch (_) {
-      if (!wantsVideo) rethrow;
-      callNotice = 'Camera unavailable. Receiving video only.';
-      final stream = await navigator.mediaDevices.getUserMedia({'audio': true});
-      _attachLocalStream(stream);
+    } catch (error) {
+      if (!wantsVideo) {
+        callNotice = _formatMediaError(error, wantsVideo: false);
+        rethrow;
+      }
+      callNotice = _formatMediaError(error, wantsVideo: true);
+      try {
+        final stream = await navigator.mediaDevices.getUserMedia({'audio': true});
+        _attachLocalStream(stream);
+      } catch (audioError) {
+        callNotice = _formatMediaError(audioError, wantsVideo: false);
+        rethrow;
+      }
     }
   }
 
@@ -343,6 +361,23 @@ class CallState extends ChangeNotifier {
     localMicOn = stream.getAudioTracks().firstOrNull?.enabled ?? true;
     canFlipCamera = stream.getVideoTracks().isNotEmpty;
     notifyListeners();
+  }
+
+  String _formatMediaError(Object error, {required bool wantsVideo}) {
+    final message = error.toString().toLowerCase();
+    final isPermission = message.contains('permission') ||
+        message.contains('not allowed') ||
+        message.contains('denied');
+    if (wantsVideo) {
+      if (isPermission) {
+        return 'Camera permission denied. Receiving audio only.';
+      }
+      return 'Camera unavailable. Receiving audio only.';
+    }
+    if (isPermission) {
+      return 'Microphone permission denied.';
+    }
+    return 'Microphone unavailable.';
   }
 
   Future<void> _ensurePeerConnection(String peer, bool wantsVideo) async {
@@ -374,12 +409,22 @@ class CallState extends ChangeNotifier {
     };
 
     if (_localStream == null) {
-      await _prepareOutgoingMedia(wantsVideo ? 'video' : 'audio');
+      try {
+        await _prepareOutgoingMedia(wantsVideo ? 'video' : 'audio');
+      } catch (_) {
+        _resetCallState();
+        rethrow;
+      }
     }
 
     if (_localStream != null) {
-      for (final track in _localStream!.getTracks()) {
-        await _peerConnection!.addTrack(track, _localStream!);
+      try {
+        for (final track in _localStream!.getTracks()) {
+          await _peerConnection!.addTrack(track, _localStream!);
+        }
+      } catch (_) {
+        _resetCallState();
+        rethrow;
       }
     }
   }
