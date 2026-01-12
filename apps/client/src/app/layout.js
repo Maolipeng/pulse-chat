@@ -1,3 +1,5 @@
+"use cache";
+
 import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegister from "./sw-register";
@@ -15,7 +17,7 @@ export const metadata = {
   themeColor: "#5EC7D9",
 };
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
   return (
     <html lang="en">
       <body className={`${spaceGrotesk.variable} antialiased`}>
