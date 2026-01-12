@@ -14,6 +14,9 @@ export const metadata = {
   title: "PulseChat",
   description: "PulseChat cross-platform messaging.",
   manifest: "/manifest.webmanifest",
+};
+
+export const viewport = {
   themeColor: "#5EC7D9",
 };
 

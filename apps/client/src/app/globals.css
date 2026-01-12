@@ -28,3 +28,236 @@ html {
 * {
   box-sizing: border-box;
 }
+
+.emoji-burst-bg {
+  background: radial-gradient(circle at 30% 30%, rgba(16, 185, 129, 0.35), transparent 40%),
+    radial-gradient(circle at 70% 40%, rgba(251, 191, 36, 0.35), transparent 45%),
+    radial-gradient(circle at 45% 70%, rgba(244, 114, 182, 0.25), transparent 40%);
+  animation: emoji-burst-fade 1.4s ease-out forwards;
+}
+
+.emoji-burst-bg-glow {
+  background: radial-gradient(circle at 25% 20%, rgba(14, 165, 233, 0.4), transparent 38%),
+    radial-gradient(circle at 80% 30%, rgba(16, 185, 129, 0.45), transparent 42%),
+    radial-gradient(circle at 50% 80%, rgba(251, 191, 36, 0.3), transparent 40%);
+}
+
+.emoji-burst-bg-pulse {
+  background: radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.35), transparent 45%),
+    radial-gradient(circle at 25% 70%, rgba(94, 234, 212, 0.35), transparent 40%),
+    radial-gradient(circle at 70% 30%, rgba(248, 113, 113, 0.3), transparent 40%);
+  animation: emoji-burst-fade 1.4s ease-out forwards, emoji-burst-pulse 1.1s ease-out;
+}
+
+.emoji-burst-bg-wave {
+  background: radial-gradient(circle at 15% 30%, rgba(59, 130, 246, 0.35), transparent 42%),
+    radial-gradient(circle at 85% 60%, rgba(244, 114, 182, 0.3), transparent 38%),
+    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.25), transparent 48%);
+  animation: emoji-burst-fade 1.4s ease-out forwards, emoji-burst-wave 1.2s ease-out;
+}
+
+.emoji-burst-bg-spark {
+  background: radial-gradient(circle at 30% 40%, rgba(250, 204, 21, 0.4), transparent 38%),
+    radial-gradient(circle at 70% 25%, rgba(16, 185, 129, 0.4), transparent 42%),
+    radial-gradient(circle at 50% 80%, rgba(251, 113, 133, 0.3), transparent 38%);
+  filter: saturate(1.1);
+}
+
+.emoji-burst-emoji {
+  font-size: clamp(96px, 22vw, 220px);
+  line-height: 1;
+  text-shadow: 0 18px 40px rgba(16, 24, 16, 0.25);
+  animation: emoji-burst-pop 1.2s ease-out forwards;
+}
+
+.emoji-burst-emoji-glow {
+  text-shadow: 0 20px 45px rgba(16, 24, 16, 0.3), 0 0 35px rgba(14, 165, 233, 0.45);
+  animation: emoji-burst-pop 1.2s ease-out forwards, emoji-burst-shimmer 1s ease-out;
+}
+
+.emoji-burst-emoji-pulse {
+  animation: emoji-burst-pop 1.2s ease-out forwards, emoji-burst-beat 0.9s ease-out;
+}
+
+.emoji-burst-emoji-wave {
+  animation: emoji-burst-pop 1.2s ease-out forwards, emoji-burst-tilt 1.1s ease-out;
+}
+
+.emoji-burst-emoji-spark {
+  animation: emoji-burst-pop 1.2s ease-out forwards, emoji-burst-flare 1s ease-out;
+}
+
+.emoji-burst-ghost {
+  font-size: clamp(56px, 10vw, 120px);
+  line-height: 1;
+  opacity: 0.7;
+  filter: blur(0.5px);
+  animation: emoji-burst-float 1.3s ease-out forwards;
+}
+
+.emoji-burst-ghost-alt {
+  animation-delay: 0.12s;
+}
+
+.emoji-burst-sparkle {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95), rgba(16, 185, 129, 0.75));
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.65);
+  animation: emoji-burst-sparkle 1.1s ease-out forwards;
+}
+
+.emoji-burst-sparkle-glow {
+  box-shadow: 0 0 22px rgba(14, 165, 233, 0.7);
+}
+
+.emoji-burst-sparkle-pulse {
+  animation: emoji-burst-sparkle 1.1s ease-out forwards, emoji-burst-beat 0.9s ease-out;
+}
+
+.emoji-burst-sparkle-wave {
+  animation: emoji-burst-sparkle 1.1s ease-out forwards, emoji-burst-wave 1.1s ease-out;
+}
+
+.emoji-burst-sparkle-spark {
+  box-shadow: 0 0 24px rgba(251, 191, 36, 0.8);
+  animation: emoji-burst-sparkle 1.1s ease-out forwards, emoji-burst-flare 0.9s ease-out;
+}
+
+@keyframes emoji-burst-pop {
+  0% {
+    transform: scale(0.6) translateY(10px);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.08) translateY(-6px);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes emoji-burst-float {
+  0% {
+    transform: translateY(12px) rotate(-6deg);
+    opacity: 0;
+  }
+  60% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateY(-18px) rotate(6deg);
+    opacity: 0.75;
+  }
+}
+
+@keyframes emoji-burst-sparkle {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  45% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+}
+
+@keyframes emoji-burst-fade {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes emoji-burst-beat {
+  0% {
+    transform: scale(0.92);
+  }
+  45% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes emoji-burst-tilt {
+  0% {
+    transform: rotate(-6deg) scale(0.96);
+  }
+  60% {
+    transform: rotate(5deg) scale(1.04);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+@keyframes emoji-burst-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.4;
+  }
+  55% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+@keyframes emoji-burst-wave {
+  0% {
+    transform: translateY(12px);
+    opacity: 0.4;
+  }
+  70% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+}
+
+@keyframes emoji-burst-flare {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.2;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+@keyframes emoji-burst-shimmer {
+  0% {
+    filter: brightness(0.9);
+  }
+  50% {
+    filter: brightness(1.15);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}

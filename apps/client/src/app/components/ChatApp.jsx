@@ -28,11 +28,26 @@ export default function ChatApp({ initialTab = "chat" }) {
   const [notice, setNotice] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [emojiBurst, setEmojiBurst] = useState(null);
+  const emojiBurstVariants = useRef(["glow", "pulse", "wave", "spark"]);
 
   const bottomRef = useRef(null);
   const searchRef = useRef(null);
   const messageInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const emojiBurstTimerRef = useRef(null);
+
+  const handleEmojiBurst = (emoji) => {
+    const variants = emojiBurstVariants.current;
+    const variant = variants[Math.floor(Math.random() * variants.length)];
+    setEmojiBurst({ emoji, id: Date.now(), variant });
+    if (emojiBurstTimerRef.current) {
+      clearTimeout(emojiBurstTimerRef.current);
+    }
+    emojiBurstTimerRef.current = setTimeout(() => {
+      setEmojiBurst(null);
+    }, 1400);
+  };
 
   const {
     apiFetch,
@@ -55,10 +70,12 @@ export default function ChatApp({ initialTab = "chat" }) {
     encryptMessage: messaging.encryptMessage,
     decryptMessage: messaging.decryptMessage,
     ensureConversationKey: messaging.ensureConversationKey,
+    clearConversationState: messaging.clearConversationState,
     distributeGroupKey: messaging.distributeGroupKey,
     fileToDataUrl: messaging.fileToDataUrl,
     messageInputRef,
     bottomRef,
+    onEmojiBurst: handleEmojiBurst,
   });
 
   const callSession = useCallSession({ socket, user });
@@ -78,6 +95,14 @@ export default function ChatApp({ initialTab = "chat" }) {
       callSession.resetCallState();
     }
   }, [callSession.resetCallState, connectionStatus]);
+
+  useEffect(() => {
+    return () => {
+      if (emojiBurstTimerRef.current) {
+        clearTimeout(emojiBurstTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const setAppHeight = () => {
@@ -209,6 +234,35 @@ export default function ChatApp({ initialTab = "chat" }) {
       onDrop={handleDropFiles}
     >
       <audio ref={callSession.audioRef} autoPlay playsInline />
+      {emojiBurst && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div
+            className={`absolute inset-0 emoji-burst-bg emoji-burst-bg-${emojiBurst.variant}`}
+          />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div
+              className={`emoji-burst-emoji emoji-burst-emoji-${emojiBurst.variant}`}
+            >
+              {emojiBurst.emoji}
+            </div>
+          </div>
+          <div className="absolute left-12 top-16 emoji-burst-ghost">
+            {emojiBurst.emoji}
+          </div>
+          <div className="absolute right-14 bottom-16 emoji-burst-ghost emoji-burst-ghost-alt">
+            {emojiBurst.emoji}
+          </div>
+          <div
+            className={`absolute left-1/2 top-10 emoji-burst-sparkle emoji-burst-sparkle-${emojiBurst.variant}`}
+          />
+          <div
+            className={`absolute right-24 top-1/3 emoji-burst-sparkle emoji-burst-sparkle-${emojiBurst.variant}`}
+          />
+          <div
+            className={`absolute left-20 bottom-24 emoji-burst-sparkle emoji-burst-sparkle-${emojiBurst.variant}`}
+          />
+        </div>
+      )}
       <div className="w-full h-[var(--app-height,100svh)] sm:h-[92svh] md:h-[84vh] max-w-6xl bg-white/80 border border-white/70 sm:rounded-3xl shadow-2xl backdrop-blur overflow-hidden pb-[env(safe-area-inset-bottom)] relative">
         {dragActive && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-emerald-900/20 backdrop-blur">
@@ -385,6 +439,7 @@ export default function ChatApp({ initialTab = "chat" }) {
                   onMessageDraft={conversations.setMessageDraft}
                   onSend={conversations.handleSend}
                   onSendFile={conversations.handleSendFile}
+                  onEmojiBurst={handleEmojiBurst}
                   messageInputRef={messageInputRef}
                   fileInputRef={fileInputRef}
                 />

@@ -256,6 +256,13 @@ export default function useMessaging({ apiFetch, user, onNotice }) {
       if (typeof message.metadata?.counter !== "number") {
         return "[Encrypted message]";
       }
+      if (senderChain.counter > message.metadata.counter) {
+        if (retrying) return "[Unable to decrypt]";
+        clearConversationState(conversation.id);
+        const refreshed = await ensureConversationKey(conversation);
+        if (!refreshed) return "[Unable to decrypt]";
+        return decryptMessage(conversation, message, true);
+      }
       const iv = message.metadata?.iv || message.iv;
       if (!iv) {
         return "[Encrypted message]";
@@ -335,10 +342,20 @@ export default function useMessaging({ apiFetch, user, onNotice }) {
   );
 
   const fileToDataUrl = useCallback(
-    (file) =>
+    (file, onProgress) =>
       new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
+        reader.onloadstart = () => onProgress?.(0);
+        reader.onprogress = (event) => {
+          if (!onProgress) return;
+          if (event.lengthComputable && event.total > 0) {
+            onProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        };
+        reader.onload = () => {
+          onProgress?.(100);
+          resolve(reader.result);
+        };
         reader.onerror = () => reject(new Error("Failed to read file"));
         reader.readAsDataURL(file);
       }),
@@ -370,6 +387,7 @@ export default function useMessaging({ apiFetch, user, onNotice }) {
 
   return useMemo(
     () => ({
+      clearConversationState,
       encryptMessage,
       decryptMessage,
       ensureConversationKey,
@@ -379,6 +397,7 @@ export default function useMessaging({ apiFetch, user, onNotice }) {
       identityRef,
     }),
     [
+      clearConversationState,
       decryptMessage,
       distributeGroupKey,
       encryptMessage,

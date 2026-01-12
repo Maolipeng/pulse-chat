@@ -11,10 +11,12 @@ export default function useConversations({
   encryptMessage,
   decryptMessage,
   ensureConversationKey,
+  clearConversationState,
   distributeGroupKey,
   fileToDataUrl,
   messageInputRef,
   bottomRef,
+  onEmojiBurst,
 }) {
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -31,10 +33,18 @@ export default function useConversations({
     : "";
 
   const conversationsRef = useRef([]);
+  const selectedConversationIdRef = useRef("");
+  const emojiRegex = useRef(
+    /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D]+$/u,
+  );
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
 
   useEffect(() => {
     const fetchConversations = async () => {
@@ -72,6 +82,14 @@ export default function useConversations({
   useEffect(() => {
     if (!socket || !user) return;
 
+    const isEmojiOnly = (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return false;
+      const compact = trimmed.replace(/\s+/g, "");
+      if (compact.length > 12) return false;
+      return emojiRegex.current.test(compact);
+    };
+
     const handleMessage = async (payload) => {
       const conversation = conversationsRef.current.find(
         (item) => item.id === payload.conversationId,
@@ -89,6 +107,15 @@ export default function useConversations({
       const enriched = { ...payload, plaintext };
 
       if (
+        payload.sender?.username &&
+        payload.sender.username !== user.username &&
+        payload.conversationId === selectedConversationIdRef.current &&
+        isEmojiOnly(plaintext)
+      ) {
+        onEmojiBurst?.(plaintext);
+      }
+
+      if (
         notificationsEnabled &&
         document.hidden &&
         payload.sender?.username &&
@@ -102,6 +129,18 @@ export default function useConversations({
       setMessagesByConversation((prev) => {
         const updated = { ...prev };
         const thread = updated[payload.conversationId] || [];
+        const clientId = payload.metadata?.clientId;
+        if (clientId && payload.sender?.username === user.username) {
+          const index = thread.findIndex(
+            (message) => message.metadata?.clientId === clientId,
+          );
+          if (index !== -1) {
+            const nextThread = [...thread];
+            nextThread[index] = enriched;
+            updated[payload.conversationId] = nextThread;
+            return updated;
+          }
+        }
         updated[payload.conversationId] = [...thread, enriched];
         return updated;
       });
@@ -218,18 +257,27 @@ export default function useConversations({
         socket?.emit("conversation:join", { conversationId: conversation.id });
         await ensureConversationKey(conversation);
         const payload = await apiFetch(`/api/conversations/${conversation.id}/messages`);
-        const decrypted = [];
-
-        for (const message of payload.messages || []) {
-          let plaintext = message.body;
-          if (message.metadata) {
-            try {
-              plaintext = await decryptMessage(conversation, message);
-            } catch (error) {
-              plaintext = "[Unable to decrypt]";
+        const decryptThread = async () => {
+          const decrypted = [];
+          for (const message of payload.messages || []) {
+            let plaintext = message.body;
+            if (message.metadata) {
+              try {
+                plaintext = await decryptMessage(conversation, message);
+              } catch (error) {
+                plaintext = "[Unable to decrypt]";
+              }
             }
+            decrypted.push({ ...message, plaintext });
           }
-          decrypted.push({ ...message, plaintext });
+          return decrypted;
+        };
+
+        let decrypted = await decryptThread();
+        if (decrypted.some((message) => message.plaintext === "[Unable to decrypt]")) {
+          clearConversationState?.(conversation.id);
+          await ensureConversationKey(conversation);
+          decrypted = await decryptThread();
         }
 
         setMessagesByConversation((prev) => ({
@@ -260,6 +308,7 @@ export default function useConversations({
       apiFetch,
       decryptMessage,
       ensureConversationKey,
+      clearConversationState,
       messageInputRef,
       onNotice,
       socket,
@@ -300,6 +349,33 @@ export default function useConversations({
       const thread = updated[conversationId] || [];
       updated[conversationId] = [...thread, payload];
       return updated;
+    });
+  }, []);
+
+  const patchLocalMessage = useCallback((conversationId, messageId, patch) => {
+    setMessagesByConversation((prev) => {
+      const thread = prev[conversationId] || [];
+      const updatedThread = thread.map((message) => {
+        if (message.id !== messageId) return message;
+        if (typeof patch === "function") {
+          return patch(message);
+        }
+        return { ...message, ...patch };
+      });
+      return { ...prev, [conversationId]: updatedThread };
+    });
+  }, []);
+
+  const replaceLocalMessage = useCallback((conversationId, messageId, nextMessage) => {
+    setMessagesByConversation((prev) => {
+      const thread = prev[conversationId] || [];
+      const index = thread.findIndex((message) => message.id === messageId);
+      if (index === -1) {
+        return { ...prev, [conversationId]: [...thread, nextMessage] };
+      }
+      const nextThread = [...thread];
+      nextThread[index] = nextMessage;
+      return { ...prev, [conversationId]: nextThread };
     });
   }, []);
 
@@ -361,19 +437,79 @@ export default function useConversations({
       if (!file) return;
       const conversation = selectedConversation;
       if (!conversation) return;
+      if (!user) return;
+      const clientId = `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const tempId = `temp-${clientId}`;
+      const createdAt = new Date().toISOString();
+
+      pushLocalMessage(conversation.id, {
+        id: tempId,
+        conversationId: selectedConversationId,
+        body: "",
+        plaintext: "",
+        createdAt,
+        sender: { id: user.id, username: user.username },
+        metadata: {
+          kind: "file",
+          name: file.name,
+          size: file.size,
+          mime: file.type,
+          clientId,
+          upload: { progress: 0, status: "reading" },
+        },
+      });
 
       try {
-        const dataUrl = await fileToDataUrl(file);
+        const dataUrl = await fileToDataUrl(file, (percent) => {
+          const progress = Math.min(70, Math.round((percent / 100) * 70));
+          patchLocalMessage(conversation.id, tempId, (message) => ({
+            ...message,
+            metadata: {
+              ...message.metadata,
+              upload: {
+                ...message.metadata?.upload,
+                progress,
+                status: "reading",
+              },
+            },
+          }));
+        });
+
+        patchLocalMessage(conversation.id, tempId, (message) => ({
+          ...message,
+          plaintext: dataUrl,
+          metadata: {
+            ...message.metadata,
+            upload: { ...message.metadata?.upload, progress: 80, status: "encrypting" },
+          },
+        }));
+
         const encrypted = await encryptMessage(conversation, dataUrl, {
           kind: "file",
           name: file.name,
           size: file.size,
           mime: file.type,
+          clientId,
         });
         if (!encrypted) {
           onNotice?.("Unable to encrypt file. Please try again.");
+          patchLocalMessage(conversation.id, tempId, (message) => ({
+            ...message,
+            metadata: {
+              ...message.metadata,
+              upload: { ...message.metadata?.upload, status: "failed" },
+            },
+          }));
           return;
         }
+
+        patchLocalMessage(conversation.id, tempId, (message) => ({
+          ...message,
+          metadata: {
+            ...message.metadata,
+            upload: { ...message.metadata?.upload, progress: 90, status: "sending" },
+          },
+        }));
 
         if (socket) {
           socket.emit("message:send", {
@@ -381,6 +517,13 @@ export default function useConversations({
             body: encrypted.ciphertext,
             metadata: encrypted.metadata,
           });
+          patchLocalMessage(conversation.id, tempId, (message) => ({
+            ...message,
+            metadata: {
+              ...message.metadata,
+              upload: { ...message.metadata?.upload, progress: 100, status: "sent" },
+            },
+          }));
           return;
         }
 
@@ -394,12 +537,19 @@ export default function useConversations({
           }),
         });
 
-        pushLocalMessage(conversation.id, {
+        replaceLocalMessage(conversation.id, tempId, {
           ...payload.message,
           plaintext: dataUrl,
         });
       } catch (error) {
         onNotice?.(error.message);
+        patchLocalMessage(conversation.id, tempId, (message) => ({
+          ...message,
+          metadata: {
+            ...message.metadata,
+            upload: { ...message.metadata?.upload, status: "failed" },
+          },
+        }));
       }
     },
     [
@@ -407,10 +557,13 @@ export default function useConversations({
       encryptMessage,
       fileToDataUrl,
       onNotice,
+      patchLocalMessage,
       pushLocalMessage,
+      replaceLocalMessage,
       selectedConversation,
       selectedConversationId,
       socket,
+      user,
     ],
   );
 

@@ -96,7 +96,7 @@ export default function CallAudioPanel({
             <button
               type="button"
               onClick={onEndCall}
-              className="h-11 w-11 rounded-full bg-red-500 text-white shadow-lg transition active:scale-95 active:bg-red-600"
+              className="h-11 w-11 rounded-full bg-red-500 text-white shadow-lg flex items-center justify-center transition active:scale-95 active:bg-red-600"
               aria-label="Hang up"
             >
               <PhoneDisconnect size={20} weight="regular" />

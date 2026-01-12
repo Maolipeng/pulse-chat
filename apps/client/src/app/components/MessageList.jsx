@@ -22,6 +22,10 @@ export default function MessageList({
           const content = message.plaintext || message.body;
           const isFile = message.metadata?.kind === "file";
           const isImage = isFile && (message.metadata?.mime || "").startsWith("image/");
+          const isVideo = isFile && (message.metadata?.mime || "").startsWith("video/");
+          const uploadProgress = message.metadata?.upload?.progress;
+          const uploadStatus = message.metadata?.upload?.status;
+          const hasContent = Boolean(content);
 
           return (
             <div
@@ -37,7 +41,7 @@ export default function MessageList({
               >
                 {isFile ? (
                   <div className="space-y-2">
-                    {isImage && (
+                    {isImage && hasContent && (
                       <a
                         href={content}
                         target="_blank"
@@ -51,16 +55,51 @@ export default function MessageList({
                         />
                       </a>
                     )}
-                    <a
-                      href={content}
-                      download={message.metadata?.name || "file"}
-                      className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-white/80 px-3 py-2 text-sm text-emerald-800 hover:border-emerald-300"
-                    >
-                      <span aria-hidden="true">📎</span>
-                      <span className="min-w-0 flex-1 truncate">
-                        {message.metadata?.name || "Download file"}
-                      </span>
-                    </a>
+                    {isVideo && hasContent && (
+                      <div className="overflow-hidden rounded-xl border border-emerald-100 bg-black/5">
+                        <video
+                          src={content}
+                          controls
+                          preload="metadata"
+                          className="h-48 w-full object-cover"
+                        />
+                      </div>
+                    )}
+                    {hasContent ? (
+                      <a
+                        href={content}
+                        download={message.metadata?.name || "file"}
+                        className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-white/80 px-3 py-2 text-sm text-emerald-800 hover:border-emerald-300"
+                      >
+                        <span aria-hidden="true">📎</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {message.metadata?.name || "Download file"}
+                        </span>
+                      </a>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-white/80 px-3 py-2 text-sm text-emerald-800">
+                        <span aria-hidden="true">📎</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {message.metadata?.name || "Uploading file"}
+                        </span>
+                      </div>
+                    )}
+                    {typeof uploadProgress === "number" && uploadProgress < 100 && (
+                      <div className="pt-1">
+                        <div className="h-1.5 w-full rounded-full bg-emerald-100 overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-500 transition-[width] duration-150"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                        <div className="mt-1 text-[11px] text-emerald-600">
+                          {uploadStatus === "encrypting" && "Encrypting"}
+                          {uploadStatus === "sending" && "Uploading"}
+                          {uploadStatus === "reading" && "Preparing"}
+                          {!uploadStatus && "Uploading"} {uploadProgress}%
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="leading-relaxed">{content}</p>
