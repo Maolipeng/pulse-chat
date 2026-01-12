@@ -1,12 +1,12 @@
 {
   "name": "PulseChat",
   "short_name": "PulseChat",
-  "description": "Realtime chat MVP inspired by WhatsApp.",
+  "description": "PulseChat cross-platform messaging.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f2f1ed",
-  "theme_color": "#25d366",
+  "background_color": "#EAF6F8",
+  "theme_color": "#5EC7D9",
   "icons": [
     {
       "src": "/icons/icon-192.svg",

@@ -10,9 +10,9 @@ const spaceGrotesk = Space_Grotesk({
 
 export const metadata = {
   title: "PulseChat",
-  description: "A realtime chat MVP inspired by WhatsApp.",
+  description: "PulseChat cross-platform messaging.",
   manifest: "/manifest.webmanifest",
-  themeColor: "#25d366",
+  themeColor: "#5EC7D9",
 };
 
 export default function RootLayout({ children }) {

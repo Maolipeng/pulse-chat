@@ -32,3 +32,23 @@ yarn-error.log*
 
 # coverage
 coverage/
+
+# flutter (apps/flutter)
+apps/flutter/.dart_tool/
+apps/flutter/.flutter-plugins
+apps/flutter/.flutter-plugins-dependencies
+apps/flutter/.packages
+apps/flutter/build/
+apps/flutter/android/.gradle/
+apps/flutter/android/local.properties
+apps/flutter/android/app/debug.keystore
+apps/flutter/ios/Pods/
+apps/flutter/ios/.symlinks/
+apps/flutter/ios/Flutter/ephemeral/
+apps/flutter/ios/Flutter/Generated.xcconfig
+apps/flutter/ios/Flutter/Flutter.podspec
+apps/flutter/ios/Runner.xcworkspace/
+apps/flutter/ios/Runner/GeneratedPluginRegistrant.*
+apps/flutter/macos/Pods/
+apps/flutter/macos/Flutter/ephemeral/
+apps/flutter/macos/Runner/GeneratedPluginRegistrant.*

@@ -18,7 +18,8 @@
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f",
     "db:reset": "docker compose down -v",
-    "studio": "pnpm --filter server prisma:studio"
+    "studio": "pnpm --filter server prisma:studio",
+    "setup": "bash scripts/one-click.sh"
   },
   "devDependencies": {
     "turbo": "^2.1.2"

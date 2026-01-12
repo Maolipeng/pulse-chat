@@ -1,7 +1,23 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="512" height="512" rx="128" fill="#25D366"/>
-  <path d="M154 172C154 151.013 171.013 134 192 134H320C340.987 134 358 151.013 358 172V300C358 320.987 340.987 338 320 338H240L190 388V338H192C171.013 338 154 320.987 154 300V172Z" fill="#FFFFFF"/>
-  <circle cx="220" cy="240" r="16" fill="#25D366"/>
-  <circle cx="256" cy="240" r="16" fill="#25D366"/>
-  <circle cx="292" cy="240" r="16" fill="#25D366"/>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6FE3F2"/>
+      <stop offset="1" stop-color="#46B3C7"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(320 260) rotate(35) scale(520)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pulse" x1="340" y1="520" x2="700" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4BB5C7"/>
+      <stop offset="1" stop-color="#2D8FA3"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="url(#glow)"/>
+  <g>
+    <rect x="212" y="248" width="600" height="420" rx="120" fill="#F6FBFE"/>
+    <path d="M612 668L674 748C682 758 676 772 664 772H512C468 772 428 758 398 732L324 668H612Z" fill="#F6FBFE"/>
+    <path d="M320 520H402L438 458L488 598L548 468L586 520H704" stroke="url(#pulse)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 </svg>
