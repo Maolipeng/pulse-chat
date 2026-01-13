@@ -1,12 +1,14 @@
+const allowedDevOrigins = process.env.NEXT_ALLOWED_DEV_ORIGINS
+  ? process.env.NEXT_ALLOWED_DEV_ORIGINS.split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+  : [];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   cacheComponents: true,
   reactCompiler: true,
-  allowedDevOrigins: [
-    "http://192.168.31.177",
-    "https://chat-home.peakol.top",
-    "https://chat-self-server.peakol.top",
-  ],
+  allowedDevOrigins,
 };
 
 export default nextConfig;
